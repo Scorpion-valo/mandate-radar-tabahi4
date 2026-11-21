@@ -1550,7 +1550,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                       </button>
 
                       <button
-                        onClick={onOpenHome}
+                        onClick={() => {
+                          try {
+                            localStorage.removeItem('mandate_radar_token')
+                            localStorage.removeItem('mandate_radar_user')
+                          } catch {}
+                          onOpenHome()
+                        }}
                         className="w-full py-2.5 px-3.5 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-xs text-red-600 font-medium flex items-center justify-between transition-all cursor-pointer shadow-sm"
                       >
                         <div className="flex items-center gap-2">

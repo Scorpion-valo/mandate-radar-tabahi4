@@ -29,8 +29,8 @@ export default function App() {
     } catch {}
     return {
       id: 'usr_primary',
-      name: 'Rahul Sharma',
-      email: 'rahul.sharma@example.com',
+      name: 'Arun Sharma',
+      email: 'arun.sharma@example.com',
       phone: '+91 98201 48210',
       accountLabel: 'HDFC Salaried Statement'
     }
@@ -55,9 +55,14 @@ export default function App() {
 
   const fetchInitialData = async () => {
     try {
+      const token = localStorage.getItem('mandate_radar_token')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
       const res = await fetch('/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           user_name: currentUser.name,
           user_id: currentUser.id
@@ -91,6 +96,7 @@ export default function App() {
     }
     setAuthModalOpen(false)
     setStage('dashboard')
+    fetchInitialData()
   }
 
   const loadSampleGraph = () => {

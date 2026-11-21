@@ -363,7 +363,7 @@ REFERENCE_MERCHANTS = [
 
     # Microsoft Corporation footprint
     {
-        "id": "microsoft_365",
+        "id": "microsoft_365_onedrive",
         "name": "Microsoft 365 (Office / OneDrive)",
         "category": "Cloud & Productivity",
         "parent": "Microsoft Corporation",
