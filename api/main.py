@@ -312,10 +312,18 @@ async def upload_statement_csv(
             if amt_val <= 0:
                 continue
 
+            desc_raw = str(row[desc_col]).strip() if pd.notna(row[desc_col]) else ""
+            if not desc_raw or desc_raw.lower() in ("nan", "none", "null", "undefined", ""):
+                continue
+
+            date_raw = str(row[date_col]).strip() if pd.notna(row[date_col]) else ""
+            if not date_raw or date_raw.lower() in ("nan", "none", "null", ""):
+                continue
+
             transactions.append({
                 "id": f"CSV_ROW_{idx+1}",
-                "date": str(row[date_col]).strip()[:10],
-                "descriptor": str(row[desc_col]).strip(),
+                "date": date_raw[:10],
+                "descriptor": desc_raw,
                 "amount": amt_val,
                 "type": "DEBIT",
                 "ref": str(row[ref_col]).strip() if ref_col and pd.notna(row[ref_col]) else ""

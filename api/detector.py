@@ -146,6 +146,9 @@ def analyze_statement(
 
         # Check for hard negative pattern matches first
         sample_desc = sorted_group["raw_descriptor"].iloc[0]
+        cleaned_sample = clean_descriptor(sample_desc).strip()
+        if not cleaned_sample or cleaned_sample.lower() in ("nan", "none", "null", "undefined"):
+            continue
         hard_negative_match = None
         for hn in HARD_NEGATIVE_PATTERNS:
             for p in hn["descriptors"]:
@@ -347,7 +350,10 @@ def analyze_statement(
         mech_details = PAYMENT_MECHANISMS.get(mechanism, PAYMENT_MECHANISMS["DIRECT_MERCHANT"])
 
         is_recognized = merchant_info is not None
-        merchant_name = merchant_info["name"] if is_recognized else f"Unrecognised: {clean_descriptor(sample_desc)}"
+        if is_recognized:
+            merchant_name = merchant_info["name"]
+        else:
+            merchant_name = cleaned_sample.title() if cleaned_sample else "Recurring Debit"
         category = merchant_info["category"] if is_recognized else "Uncategorized Subscription"
         parent_id = merchant_info.get("parent_id") if is_recognized else None
         parent_name = merchant_info.get("parent") if is_recognized else "Independent / Unmapped"

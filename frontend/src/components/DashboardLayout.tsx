@@ -31,17 +31,21 @@ import {
   Check,
   Shield,
   RefreshCw,
-  Plus
+  Plus,
+  Calendar as CalendarIcon
 } from 'lucide-react'
 import type { Mandate, Finding, ReconciliationResult } from '../types'
 import { inr } from '../lib/format'
 import { RadarView } from './RadarView'
 import { MandateDrawer } from './MandateDrawer'
 import { GraphCanvas, type GraphNode, type GraphEdge } from './GraphCanvas'
+import { GraphGuide } from './GraphGuide'
+import { MandateCalendar } from './MandateCalendar'
 import { FindingsConfirmationModal } from './FindingsConfirmationModal'
 
 export type DashboardTab =
   | 'portfolio'
+  | 'calendar'
   | 'graph'
   | 'upload'
   | 'banks'
@@ -99,6 +103,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [selectedMandate, setSelectedMandate] = useState<Mandate | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [cypherResult, setCypherResult] = useState<any>(null)
+  const [graphMode, setGraphMode] = useState<string>('portfolio')
 
   // Local active mandates state so updates reflect immediately
   const [localMandates, setLocalMandates] = useState<Mandate[]>(mandates)
@@ -269,6 +274,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       if (data.mandates && data.mandates.length > 0) {
         setLocalMandates(data.mandates)
         onUpdateMandates?.(data.mandates)
+        const totalAnnual = data.mandates.reduce((acc: number, m: Mandate) => acc + (m.annual_committed_cost || 0), 0)
+        const flaggedCount = data.mandates.filter((m: Mandate) => m.flags && m.flags.length > 0).length
+        const potentialSavings = data.mandates.filter((m: Mandate) => m.flags?.includes('unused') || m.flags?.includes('price_creep') || m.flags?.includes('trial_trap')).reduce((acc: number, m: Mandate) => acc + (m.annual_committed_cost || 0), 0)
+        onUpdateHeroMetrics?.({
+          annual_committed_total: totalAnnual,
+          monthly_equivalent: Math.round(totalAnnual / 12),
+          potential_savings: potentialSavings,
+          total_mandates_found: data.mandates.length,
+          flagged_issues_count: flaggedCount
+        })
       }
 
       if (data.findings && data.findings.length > 0) {
@@ -428,6 +443,24 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               </div>
               <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded-md ${activeTab === 'portfolio' ? 'bg-[#0E2419]/20 text-[#0E2419] font-bold' : 'bg-white/10 text-white'}`}>
                 {localMandates.length}
+              </span>
+            </button>
+
+            {/* 1.5. Auto-Debit Calendar */}
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-medium flex items-center justify-between transition-all cursor-pointer ${
+                activeTab === 'calendar'
+                  ? 'bg-[#EEDBCA] text-[#0E2419] font-bold shadow-md'
+                  : 'text-[#EEDBCA]/85 hover:bg-[#163525] hover:text-white'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <CalendarIcon className="w-4 h-4 text-[#2DE2B5]" />
+                <span>Auto-Debit Calendar</span>
+              </div>
+              <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded-md ${activeTab === 'calendar' ? 'bg-[#0E2419]/20 text-[#0E2419] font-bold' : 'bg-[#2DE2B5]/15 text-[#2DE2B5]'}`}>
+                Schedule
               </span>
             </button>
 
@@ -609,6 +642,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           <div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-[#0F1713] tracking-tight flex items-center gap-2">
               {activeTab === 'portfolio' && 'Mandate Portfolio Radar'}
+              {activeTab === 'calendar' && 'Auto-Debit Calendar'}
               {activeTab === 'graph' && 'Neo4j Knowledge Graph'}
               {activeTab === 'upload' && 'Upload Bank Statement'}
               {activeTab === 'banks' && 'Bank Mandate Integrations'}
@@ -691,9 +725,25 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
             />
           )}
 
+          {/* TAB 1.5: AUTO-DEBIT CALENDAR */}
+          {activeTab === 'calendar' && (
+            <MandateCalendar
+              mandates={visibleMandates}
+              onSelectMandate={m => setSelectedMandate(m)}
+              onUploadStatement={() => setActiveTab('upload')}
+            />
+          )}
+
           {/* TAB 2: GRAPH EXPLORER */}
           {activeTab === 'graph' && (
             <div className="space-y-6">
+              {/* Visual Interactive Guide */}
+              <GraphGuide
+                currentMode={graphMode}
+                onModeChange={setGraphMode}
+                onRunCypher={runCypher}
+              />
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#E8E1D2]">
                 <div>
                   <h2 className="text-lg font-bold text-[#0F1713] flex items-center gap-2">
@@ -720,8 +770,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 <GraphCanvas
                   nodes={graphData.nodes}
                   edges={graphData.edges}
-                  selectedNodeId={null}
-                  onSelectNode={() => {}}
+                  currentMode={graphMode}
+                  onModeChange={setGraphMode}
+                  onNodeClick={() => {}}
                 />
               </div>
 

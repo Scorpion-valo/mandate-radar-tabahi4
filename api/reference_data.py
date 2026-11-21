@@ -127,6 +127,12 @@ REFERENCE_MERCHANTS = [
         "default_amount": 299.0,
         "supported_cadences": ["MONTHLY", "QUARTERLY", "ANNUAL"],
         "descriptors": [
+            r"\bAMZN\b",
+            r"\bAMAZON\b",
+            r"AMZN\*",
+            r"AMAZON\s+PAY",
+            r"AMZN\s+PAY",
+            r"AMAZON\.IN",
             r"AMZN\s+PRIME\s+IN\*\d+",
             r"AMAZON\s+PRIME\s+MEMBER",
             r"AMZN\*PRIME\s+RECURRING",
