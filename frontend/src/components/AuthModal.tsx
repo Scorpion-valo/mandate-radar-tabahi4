@@ -3,11 +3,13 @@ import {
   X,
   Lock,
   ArrowRight,
+  ArrowLeft,
   Eye,
   EyeOff,
   Sparkles,
   Smartphone,
   Check,
+  CheckCircle2,
   Loader2,
   AlertCircle
 } from 'lucide-react'
@@ -16,7 +18,7 @@ interface AuthModalProps {
   isOpen: boolean
   initialMode?: 'signin' | 'signup'
   onClose: () => void
-  onSuccess: (user?: { name: string; email: string }) => void // Directly opens dashboard
+  onSuccess: (user?: { name: string; email: string; phone?: string; isDemo?: boolean }) => void
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -25,17 +27,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onSuccess
 }) => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'otp'>(initialMode)
+  const [mode, setMode] = useState<'signin' | 'signup' | 'phone_entry' | 'otp'>(initialMode)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [toastMsg, setToastMsg] = useState<string | null>(null)
 
-  // 6-digit OTP state
-  const [otp, setOtp] = useState(['4', '8', '2', '9', '1', '0'])
-  const [otpTimer, setOtpTimer] = useState(42)
+  // Phone OTP state
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [phoneFullName, setPhoneFullName] = useState('')
+  const [otp, setOtp] = useState(['', '', '', '', '', ''])
+  const [otpTimer, setOtpTimer] = useState(45)
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
@@ -43,6 +48,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setMode(initialMode)
     }
   }, [initialMode, isOpen])
+
+  useEffect(() => {
+    if (toastMsg) {
+      const timer = setTimeout(() => setToastMsg(null), 3500)
+      return () => clearTimeout(timer)
+    }
+  }, [toastMsg])
 
   useEffect(() => {
     if (mode === 'otp' && otpTimer > 0) {
@@ -74,6 +86,81 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setEmail('arun.sharma@example.com')
     setPassword('MandateRadar2026!')
     setErrorMessage('')
+    setToastMsg('Filled demo credentials: arun.sharma@example.com')
+  }
+
+  const fillDemoPhone = () => {
+    setPhoneNumber('9820148210')
+    setPhoneFullName('Arun Sharma')
+    setErrorMessage('')
+  }
+
+  const fillDemoOtp = () => {
+    setOtp(['4', '8', '2', '9', '1', '0'])
+    setErrorMessage('')
+    setToastMsg('Auto-filled OTP: 482910')
+  }
+
+  const handleSendPhoneOtp = (e: React.FormEvent) => {
+    e.preventDefault()
+    const clean = phoneNumber.replace(/\D/g, '')
+    if (clean.length !== 10) {
+      setErrorMessage('Please enter a valid 10-digit Indian mobile number.')
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage('')
+
+    setTimeout(() => {
+      setIsLoading(false)
+      setOtp(['', '', '', '', '', ''])
+      setOtpTimer(45)
+      setMode('otp')
+      setToastMsg(`Verification code 482910 sent to +91 ${clean}`)
+    }, 500)
+  }
+
+  const handleVerifyPhoneOtp = (e: React.FormEvent) => {
+    e.preventDefault()
+    const code = otp.join('')
+    if (code.length !== 6) {
+      setErrorMessage('Please enter the full 6-digit verification code.')
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage('')
+
+    setTimeout(() => {
+      setIsLoading(false)
+      const cleanPhone = phoneNumber.replace(/\D/g, '') || '9820148210'
+      const displayName = phoneFullName.trim() || `User +91 ${cleanPhone.slice(-4)}`
+      const phoneEmail = `${cleanPhone}@phone.mandateradar.in`
+      const isDemo = cleanPhone === '9820148210' && phoneFullName === 'Arun Sharma'
+
+      const userObj = {
+        id: `usr_${cleanPhone}`,
+        name: displayName,
+        email: phoneEmail,
+        phone: `+91 ${cleanPhone}`,
+        accountLabel: `${displayName.split(' ')[0]}'s Primary Statement`,
+        isDemo
+      }
+      try {
+        localStorage.setItem('mandate_radar_user', JSON.stringify(userObj))
+      } catch {}
+
+      setToastMsg('Phone verified! Launching dashboard...')
+      setTimeout(() => {
+        onSuccess({
+          name: displayName,
+          email: phoneEmail,
+          phone: `+91 ${cleanPhone}`,
+          isDemo
+        })
+      }, 300)
+    }, 600)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -105,15 +192,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               name: data.full_name,
               email: data.email,
               phone: '+91 98201 48210',
-              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`
+              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+              isDemo: false
             })
           )
         }
         setIsLoading(false)
-        onSuccess({
-          name: data.full_name,
-          email: data.email
-        })
+        setToastMsg(`Welcome, ${data.full_name}! Account created.`)
+        setTimeout(() => {
+          onSuccess({
+            name: data.full_name,
+            email: data.email,
+            isDemo: false
+          })
+        }, 400)
       } else if (mode === 'signin') {
         const res = await fetch('/api/v1/auth/login', {
           method: 'POST',
@@ -127,6 +219,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (!res.ok) {
           throw new Error(data.detail || 'Invalid email or password.')
         }
+        const isDemo = data.email === 'arun.sharma@example.com'
         if (data.access_token) {
           localStorage.setItem('mandate_radar_token', data.access_token)
           localStorage.setItem(
@@ -136,22 +229,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               name: data.full_name,
               email: data.email,
               phone: '+91 98201 48210',
-              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`
+              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+              isDemo
             })
           )
         }
         setIsLoading(false)
-        onSuccess({
-          name: data.full_name,
-          email: data.email
-        })
-      } else {
-        // OTP demo verification
-        setIsLoading(false)
-        onSuccess({
-          name: fullName || (email ? email.split('@')[0] : 'Arun Sharma'),
-          email: email || 'arun.sharma@example.com'
-        })
+        setToastMsg(`Welcome back, ${data.full_name}!`)
+        setTimeout(() => {
+          onSuccess({
+            name: data.full_name,
+            email: data.email,
+            isDemo
+          })
+        }, 400)
       }
     } catch (err: any) {
       setIsLoading(false)
@@ -160,16 +251,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   }
 
   const handleDirectSampleBypass = () => {
-    onSuccess({
-      name: 'Arun Sharma',
-      email: 'arun.sharma@example.com'
-    })
+    setToastMsg('Launching demo session...')
+    setTimeout(() => {
+      onSuccess({
+        name: 'Arun Sharma',
+        email: 'arun.sharma@example.com',
+        isDemo: true
+      })
+    }, 300)
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in text-left">
       <div className="relative w-full max-w-[480px] bg-[#07110C] border border-[rgba(238,219,202,0.2)] rounded-[32px] p-6 sm:p-8 shadow-2xl text-[#FAF8F5]">
         
+        {/* Floating Toast Notification */}
+        {toastMsg && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-[#2DE2B5] text-[#07110C] font-semibold text-xs shadow-xl animate-fade-in whitespace-nowrap">
+            <CheckCircle2 className="w-4 h-4 text-[#07110C] shrink-0" />
+            <span>{toastMsg}</span>
+          </div>
+        )}
+
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -197,19 +300,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             {mode === 'signup'
               ? 'Create your account'
+              : mode === 'phone_entry'
+              ? 'Sign in with Mobile'
               : mode === 'otp'
               ? 'Enter 6-digit code'
               : 'Sign in to your Radar'}
           </h2>
           <p className="text-xs sm:text-sm text-[#9BAEA2] mt-1.5 leading-relaxed">
-            {mode === 'otp'
-              ? 'Enter the verification code sent to +91 98••• ••812'
+            {mode === 'phone_entry'
+              ? 'Enter your mobile number to receive a secure OTP code.'
+              : mode === 'otp'
+              ? `Enter the verification code sent to +91 ${phoneNumber || '98201 48210'}`
               : 'Access your auto-debits, recurring mandates, and cancellation routes.'}
           </p>
         </div>
 
         {/* Mode Switcher Tabs (Sign In vs Create Account) */}
-        {mode !== 'otp' && (
+        {mode !== 'otp' && mode !== 'phone_entry' && (
           <div className="flex rounded-xl bg-[#0E1F17] p-1 border border-white/10 mb-6">
             <button
               type="button"
@@ -244,13 +351,101 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         )}
 
-        {/* OTP Screen */}
-        {mode === 'otp' ? (
-          <form onSubmit={handleSubmit} className="space-y-5">
+        {/* STEP 1: Phone Number Input */}
+        {mode === 'phone_entry' ? (
+          <form onSubmit={handleSendPhoneOtp} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-[#EEDBCA] mb-2.5">
-                Verification Code
+              <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
+                Full Name (Optional)
               </label>
+              <input
+                type="text"
+                value={phoneFullName}
+                onChange={e => setPhoneFullName(e.target.value)}
+                placeholder="e.g. Rahul Verma"
+                className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
+                Mobile Number
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center px-3 py-2.5 bg-[#0E1F17] border border-white/15 rounded-xl text-xs font-mono text-[#EEDBCA] shrink-0">
+                  🇮🇳 +91
+                </div>
+                <input
+                  type="tel"
+                  maxLength={10}
+                  required
+                  value={phoneNumber}
+                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                  placeholder="98201 48210"
+                  className="flex-1 px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none font-mono text-sm tracking-wider"
+                />
+              </div>
+            </div>
+
+            {/* Quick Demo Phone Badge */}
+            <div className="p-2.5 rounded-xl bg-[#0E1F17] border border-[#2DE2B5]/30 flex items-center justify-between text-xs">
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-mono tracking-wider text-[#9BAEA2]">Test Demo Number</span>
+                <span className="font-mono text-xs text-[#2DE2B5]">+91 98201 48210</span>
+              </div>
+              <button
+                type="button"
+                onClick={fillDemoPhone}
+                className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-[#2DE2B5]/20 hover:bg-[#2DE2B5]/30 text-[#2DE2B5] border border-[#2DE2B5]/40 transition-colors cursor-pointer"
+              >
+                Auto-fill
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full h-11 bg-[#2DE2B5] text-[#07110C] font-bold text-sm rounded-xl hover:brightness-105 transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#2DE2B5]/20 cursor-pointer mt-2"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-[#07110C]" />
+                  <span>Sending Code...</span>
+                </>
+              ) : (
+                <>
+                  <span>Send Verification Code</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setErrorMessage('') }}
+              className="w-full py-2 text-xs text-[#9BAEA2] hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Email Sign In</span>
+            </button>
+          </form>
+        ) : mode === 'otp' ? (
+          /* STEP 2: OTP Verification Screen */
+          <form onSubmit={handleVerifyPhoneOtp} className="space-y-5">
+            <div>
+              <div className="flex items-center justify-between mb-2.5">
+                <label className="text-xs font-medium text-[#EEDBCA]">
+                  6-Digit Verification Code
+                </label>
+                <button
+                  type="button"
+                  onClick={fillDemoOtp}
+                  className="text-[11px] text-[#2DE2B5] hover:underline cursor-pointer"
+                >
+                  Auto-fill 482910
+                </button>
+              </div>
+
               <div className="flex items-center justify-between gap-2">
                 {otp.map((d, i) => (
                   <input
@@ -272,10 +467,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <span>Resend code in <strong>0:{otpTimer < 10 ? `0${otpTimer}` : otpTimer}</strong></span>
               <button
                 type="button"
-                onClick={() => setMode('signin')}
+                onClick={() => { setMode('phone_entry'); setErrorMessage('') }}
                 className="text-[#2DE2B5] hover:underline cursor-pointer"
               >
-                Use password
+                Change mobile number
               </button>
             </div>
 
@@ -295,6 +490,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setErrorMessage('') }}
+              className="w-full py-2 text-xs text-[#9BAEA2] hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Use password instead</span>
             </button>
           </form>
         ) : (
@@ -366,7 +570,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             {/* 1-Click Demo Credential Auto-Fill for Evaluators */}
             <div className="p-2.5 rounded-xl bg-[#0E1F17] border border-[#2DE2B5]/30 flex items-center justify-between text-xs">
               <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-mono tracking-wider text-[#9BAEA2]">Verified DB Demo User</span>
+                <span className="text-[10px] uppercase font-mono tracking-wider text-[#9BAEA2]">DB Demo Account</span>
                 <span className="font-mono text-xs text-[#2DE2B5]">arun.sharma@example.com</span>
               </div>
               <button
@@ -411,7 +615,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={handleSubmit}
+                onClick={() => {
+                  setToastMsg('Signed in with Google (Demo profile)')
+                  setTimeout(handleDirectSampleBypass, 400)
+                }}
                 className="w-full h-10 bg-[#0E1F17] hover:bg-[#142B20] border border-white/15 text-white font-medium text-xs rounded-xl flex items-center justify-center gap-2.5 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
@@ -425,7 +632,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => setMode('otp')}
+                onClick={() => { setMode('phone_entry'); setErrorMessage('') }}
                 className="w-full h-10 bg-[#0E1F17] hover:bg-[#142B20] border border-white/15 text-white font-medium text-xs rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <Smartphone className="w-4 h-4 text-[#9BAEA2]" />
@@ -444,7 +651,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <span>Try with sample data (₹65,623)</span>
               </button>
               <div className="text-[11px] text-[#9BAEA2] mt-0.5">
-                No signup needed · 1-click launch to dashboard
+                Explore pre-seeded demo portfolio with 10 mandates
               </div>
             </div>
           </form>

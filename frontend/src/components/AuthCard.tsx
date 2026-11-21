@@ -14,11 +14,11 @@ import {
   Compass
 } from 'lucide-react'
 
-export type AuthState = 'default' | 'focused' | 'error' | 'loading' | 'otp' | 'signup'
+export type AuthState = 'default' | 'focused' | 'error' | 'loading' | 'phone_entry' | 'otp' | 'signup'
 
 interface AuthCardProps {
   initialState?: AuthState
-  onSuccess?: () => void
+  onSuccess?: (user?: { name: string; email: string; phone?: string; isDemo?: boolean }) => void
   onTrySampleData?: () => void
   onOpenDesignSystem?: () => void
 }
@@ -29,8 +29,8 @@ export const AuthCard: React.FC<AuthCardProps> = ({
   onTrySampleData,
   onOpenDesignSystem
 }) => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'otp'>(
-    initialState === 'signup' ? 'signup' : initialState === 'otp' ? 'otp' : 'signin'
+  const [mode, setMode] = useState<'signin' | 'signup' | 'phone_entry' | 'otp'>(
+    initialState === 'signup' ? 'signup' : initialState === 'otp' ? 'otp' : initialState === 'phone_entry' ? 'phone_entry' : 'signin'
   )
   const [activeState, setActiveState] = useState<AuthState>(initialState)
 
@@ -44,9 +44,11 @@ export const AuthCard: React.FC<AuthCardProps> = ({
   )
   const [isLoading, setIsLoading] = useState(initialState === 'loading')
 
-  // OTP inputs (6 boxes)
-  const [otp, setOtp] = useState(['4', '8', '2', '9', '1', '0'])
-  const [otpTimer, setOtpTimer] = useState(42)
+  // Phone OTP state
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [phoneFullName, setPhoneFullName] = useState('')
+  const [otp, setOtp] = useState(['', '', '', '', '', ''])
+  const [otpTimer, setOtpTimer] = useState(45)
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
 
   // Keep state synced if prop changes
@@ -54,6 +56,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
     setActiveState(initialState)
     if (initialState === 'signup') setMode('signup')
     else if (initialState === 'otp') setMode('otp')
+    else if (initialState === 'phone_entry') setMode('phone_entry')
     else setMode('signin')
 
     if (initialState === 'error') {
@@ -110,6 +113,47 @@ export const AuthCard: React.FC<AuthCardProps> = ({
     setErrorMessage('')
   }
 
+  const handleSendPhoneOtp = (e: React.FormEvent) => {
+    e.preventDefault()
+    const clean = phoneNumber.replace(/\D/g, '')
+    if (clean.length !== 10) {
+      setErrorMessage('Please enter a valid 10-digit mobile number')
+      return
+    }
+    setIsLoading(true)
+    setErrorMessage('')
+    setTimeout(() => {
+      setIsLoading(false)
+      setOtp(['', '', '', '', '', ''])
+      setOtpTimer(45)
+      setMode('otp')
+    }, 400)
+  }
+
+  const handleVerifyPhoneOtp = (e: React.FormEvent) => {
+    e.preventDefault()
+    const code = otp.join('')
+    if (code.length !== 6) {
+      setErrorMessage('Please enter all 6 digits of the verification code.')
+      return
+    }
+    setIsLoading(true)
+    setErrorMessage('')
+    setTimeout(() => {
+      setIsLoading(false)
+      const cleanPhone = phoneNumber.replace(/\D/g, '') || '9820148210'
+      const displayName = phoneFullName.trim() || `User +91 ${cleanPhone.slice(-4)}`
+      const isDemo = cleanPhone === '9820148210' && phoneFullName === 'Arun Sharma'
+
+      onSuccess?.({
+        name: displayName,
+        email: `${cleanPhone}@phone.mandateradar.in`,
+        phone: `+91 ${cleanPhone}`,
+        isDemo
+      })
+    }, 500)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -145,12 +189,17 @@ export const AuthCard: React.FC<AuthCardProps> = ({
               name: data.full_name,
               email: data.email,
               phone: '+91 98201 48210',
-              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`
+              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+              isDemo: false
             })
           )
         }
         setIsLoading(false)
-        onSuccess?.()
+        onSuccess?.({
+          name: data.full_name,
+          email: data.email,
+          isDemo: false
+        })
       } else if (mode === 'signin') {
         const res = await fetch('/api/v1/auth/login', {
           method: 'POST',
@@ -164,6 +213,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
         if (!res.ok) {
           throw new Error(data.detail || 'Invalid email or password.')
         }
+        const isDemo = data.email === 'arun.sharma@example.com'
         if (data.access_token) {
           localStorage.setItem('mandate_radar_token', data.access_token)
           localStorage.setItem(
@@ -173,12 +223,17 @@ export const AuthCard: React.FC<AuthCardProps> = ({
               name: data.full_name,
               email: data.email,
               phone: '+91 98201 48210',
-              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`
+              accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+              isDemo
             })
           )
         }
         setIsLoading(false)
-        onSuccess?.()
+        onSuccess?.({
+          name: data.full_name,
+          email: data.email,
+          isDemo
+        })
       } else {
         setIsLoading(false)
         onSuccess?.()
@@ -221,7 +276,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
           </div>
 
           {/* Mode Switcher Link (Sign In <-> Sign Up) */}
-          {mode !== 'otp' && (
+          {mode !== 'otp' && mode !== 'phone_entry' && (
             <button
               type="button"
               onClick={() => {
@@ -240,15 +295,19 @@ export const AuthCard: React.FC<AuthCardProps> = ({
         {/* Headings */}
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#F7F3EB] leading-tight">
-            {mode === 'otp'
+            {mode === 'phone_entry'
+              ? 'Sign in with Mobile'
+              : mode === 'otp'
               ? 'Enter verification code'
               : mode === 'signup'
               ? 'Create your Mandate Radar account'
               : "Find every auto-debit. Cancel the ones you don't need."}
           </h1>
           <p className="text-sm text-[#BAC8BF] mt-2 leading-relaxed">
-            {mode === 'otp'
-              ? 'We sent a 6-digit confirmation code to your linked mobile number +91 98••• ••812'
+            {mode === 'phone_entry'
+              ? 'Enter your mobile number to receive a secure OTP code.'
+              : mode === 'otp'
+              ? `We sent a 6-digit confirmation code to linked mobile number +91 ${phoneNumber || '98201 48210'}`
               : 'Upload a bank statement. We map every recurring charge to the right cancellation route.'}
           </p>
         </div>
@@ -258,16 +317,68 @@ export const AuthCard: React.FC<AuthCardProps> = ({
           <div className="mb-5 p-3 rounded-lg border border-[#FF5C6C]/40 bg-[#FF5C6C]/10 flex items-start gap-2.5 text-xs text-[#FF5C6C] animate-shake">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#FF5C6C]" />
             <div className="flex-1">
-              <span className="font-semibold">Authentication failed: </span>
+              <span className="font-semibold">Authentication notice: </span>
               {errorMessage}
             </div>
           </div>
         )}
 
         {/* Form Container */}
-        {mode === 'otp' ? (
+        {mode === 'phone_entry' ? (
+          /* Phone Entry Screen */
+          <form onSubmit={handleSendPhoneOtp} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-[#BAC8BF] mb-2">
+                Full Name (Optional)
+              </label>
+              <input
+                type="text"
+                value={phoneFullName}
+                onChange={e => setPhoneFullName(e.target.value)}
+                placeholder="e.g. Rahul Verma"
+                className="w-full px-3.5 py-2.5 text-sm fintech-input"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#BAC8BF] mb-2">
+                Mobile Number
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="px-3 py-2.5 rounded-lg bg-[#0E1F17] border border-[#203E30] text-xs font-mono text-[#BAC8BF]">
+                  🇮🇳 +91
+                </div>
+                <input
+                  type="tel"
+                  maxLength={10}
+                  required
+                  value={phoneNumber}
+                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                  placeholder="98201 48210"
+                  className="flex-1 px-3.5 py-2.5 text-sm fintech-input font-mono tracking-wider"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full h-11 btn-primary text-sm font-semibold tracking-wide mt-2"
+            >
+              {isLoading ? 'Sending Code...' : 'Send Verification Code (OTP)'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setErrorMessage('') }}
+              className="w-full text-center text-xs text-[#BAC8BF] hover:text-[#2DE2B5] transition-colors pt-2"
+            >
+              ← Back to Email Sign In
+            </button>
+          </form>
+        ) : mode === 'otp' ? (
           /* OTP Screen */
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleVerifyPhoneOtp} className="space-y-6">
             <div>
               <label className="block text-xs font-medium text-[#BAC8BF] mb-3">
                 6-digit One Time Password (OTP)
@@ -476,7 +587,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
               {/* Phone OTP Button */}
               <button
                 type="button"
-                onClick={() => setMode('otp')}
+                onClick={() => { setMode('phone_entry'); setErrorMessage('') }}
                 className="w-full h-10.5 btn-secondary text-xs sm:text-sm font-medium"
               >
                 <Smartphone className="w-4 h-4 text-[#BAC8BF]" />

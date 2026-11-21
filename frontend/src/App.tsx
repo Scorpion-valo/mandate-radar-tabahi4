@@ -7,6 +7,24 @@ import { AuthModal } from './components/AuthModal'
 import { DesignSystemShowcase } from './components/DesignSystemShowcase'
 import { SAMPLE_MANDATES, SAMPLE_HERO_METRICS } from './lib/sampleData'
 import type { GraphNode, GraphEdge } from './components/GraphCanvas'
+import { CheckCircle2, Info } from 'lucide-react'
+
+export const EMPTY_HERO_METRICS = {
+  annual_committed_total: 0,
+  monthly_equivalent: 0,
+  potential_savings: 0,
+  total_mandates_found: 0,
+  flagged_issues_count: 0,
+  bundle_overlaps_count: 0,
+  bundle_overlap_savings: 0,
+  still_charging_count: 0,
+  verified_cancelled_count: 0
+}
+
+const isDemoAccount = (u?: { email?: string; isDemo?: boolean }) => {
+  if (!u) return false
+  return !!u.isDemo || u.email === 'arun.sharma@example.com' || u.email === 'rahul.sharma@example.com'
+}
 
 export default function App() {
   // Application Stage: 'opening' (Moneliq landing) or 'dashboard' (Full sidebar command center)
@@ -14,6 +32,14 @@ export default function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin')
   const [showDesignSystem, setShowDesignSystem] = useState(false)
+  const [toastNotification, setToastNotification] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (toastNotification) {
+      const t = setTimeout(() => setToastNotification(null), 3500)
+      return () => clearTimeout(t)
+    }
+  }, [toastNotification])
 
   // Current User Session (Persisted in localStorage, production-ready)
   const [currentUser, setCurrentUser] = useState<{
@@ -22,6 +48,7 @@ export default function App() {
     email: string
     phone?: string
     accountLabel?: string
+    isDemo?: boolean
   }>(() => {
     try {
       const saved = localStorage.getItem('mandate_radar_user')
@@ -32,13 +59,34 @@ export default function App() {
       name: 'Arun Sharma',
       email: 'arun.sharma@example.com',
       phone: '+91 98201 48210',
-      accountLabel: 'HDFC Salaried Statement'
+      accountLabel: 'HDFC Salaried Statement',
+      isDemo: true
     }
   })
 
-  // Core Data
-  const [mandates, setMandates] = useState<Mandate[]>(SAMPLE_MANDATES)
-  const [heroMetrics, setHeroMetrics] = useState(SAMPLE_HERO_METRICS)
+  // Core Data: Only pre-fill sample data for demo users. New users start fresh with 0.
+  const [mandates, setMandates] = useState<Mandate[]>(() => {
+    try {
+      const savedUser = localStorage.getItem('mandate_radar_user')
+      if (savedUser) {
+        const u = JSON.parse(savedUser)
+        if (!isDemoAccount(u)) return []
+      }
+    } catch {}
+    return SAMPLE_MANDATES
+  })
+
+  const [heroMetrics, setHeroMetrics] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('mandate_radar_user')
+      if (savedUser) {
+        const u = JSON.parse(savedUser)
+        if (!isDemoAccount(u)) return EMPTY_HERO_METRICS
+      }
+    } catch {}
+    return SAMPLE_HERO_METRICS
+  })
+
   const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set())
 
   // Graph Data
@@ -49,11 +97,19 @@ export default function App() {
   })
 
   useEffect(() => {
-    fetchInitialData()
+    if (isDemoAccount(currentUser)) {
+      fetchInitialData(currentUser)
+    }
     loadSampleGraph()
   }, [])
 
-  const fetchInitialData = async () => {
+  const fetchInitialData = async (userToFetch = currentUser) => {
+    if (!isDemoAccount(userToFetch)) {
+      setMandates([])
+      setHeroMetrics(EMPTY_HERO_METRICS)
+      return
+    }
+
     try {
       const token = localStorage.getItem('mandate_radar_token')
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -64,8 +120,8 @@ export default function App() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          user_name: currentUser.name,
-          user_id: currentUser.id
+          user_name: userToFetch.name,
+          user_id: userToFetch.id
         })
       })
       if (!res.ok) throw new Error('API offline')
@@ -80,23 +136,41 @@ export default function App() {
     }
   }
 
-  const handleAuthSuccess = (u?: { name: string; email: string }) => {
+  const handleAuthSuccess = (u?: { name: string; email: string; phone?: string; isDemo?: boolean }) => {
     if (u) {
+      const isDemo = u.isDemo ?? (u.email === 'arun.sharma@example.com')
       const updatedUser = {
         id: u.email.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase(),
         name: u.name,
         email: u.email,
-        phone: '+91 98201 48210',
-        accountLabel: `${u.name.split(' ')[0]}'s Primary Statement`
+        phone: u.phone || '+91 98201 48210',
+        accountLabel: `${u.name.split(' ')[0]}'s Primary Statement`,
+        isDemo
       }
       setCurrentUser(updatedUser)
       try {
         localStorage.setItem('mandate_radar_user', JSON.stringify(updatedUser))
       } catch {}
+
+      if (isDemo) {
+        setMandates(SAMPLE_MANDATES)
+        setHeroMetrics(SAMPLE_HERO_METRICS)
+        setToastNotification(`Welcome back, ${u.name}! Pre-seeded portfolio loaded.`)
+      } else {
+        // Brand new user: clear hardcoded sample mandates so they see clean state!
+        setMandates([])
+        setHeroMetrics(EMPTY_HERO_METRICS)
+        setToastNotification(`Welcome to Mandate Radar, ${u.name}!`)
+      }
     }
     setAuthModalOpen(false)
     setStage('dashboard')
-    fetchInitialData()
+  }
+
+  const handleLoadSampleData = () => {
+    setMandates(SAMPLE_MANDATES)
+    setHeroMetrics(SAMPLE_HERO_METRICS)
+    setToastNotification('Demo portfolio loaded (10 mandates, ₹65,623/year)')
   }
 
   const loadSampleGraph = () => {
@@ -178,7 +252,16 @@ export default function App() {
           onOpenDesignSystem={() => setShowDesignSystem(true)}
           onUpdateMandates={(newMandates) => setMandates(newMandates)}
           onUpdateHeroMetrics={(metrics) => setHeroMetrics(metrics)}
+          onLoadSampleData={handleLoadSampleData}
         />
+      )}
+
+      {/* Global Floating Toast Notification */}
+      {toastNotification && (
+        <div className="fixed top-5 right-5 z-[9999] flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-[#0E2419] border border-[#2DE2B5] text-[#FAF8F5] shadow-2xl animate-fade-in text-xs font-medium">
+          <CheckCircle2 className="w-4 h-4 text-[#2DE2B5] shrink-0" />
+          <span>{toastNotification}</span>
+        </div>
       )}
 
       {/* Unified Auth Modal (Sign In / Sign Up -> Immediately opens Dashboard) */}

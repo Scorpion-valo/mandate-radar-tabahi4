@@ -22,6 +22,8 @@ type Props = {
   onCancelFlagged: () => void
   onClear: () => void
   onOpen: (m: Mandate) => void
+  onUploadStatement?: () => void
+  onLoadDemoData?: () => void
 }
 
 type ExtendedFilter = 'all' | IssueKey | 'marked_cancelled' | 'still_charging' | 'suggested_cancel'
@@ -370,8 +372,41 @@ export function RadarView({
         })}
 
         {!loading && rows.length === 0 && (
-          <div className="p-8 text-center text-xs text-[#64756B]">
-            No mandates match this filter. Select another filter above.
+          <div className="py-12 px-6 rounded-3xl bg-white border border-[#E8E1D2] text-center max-w-xl mx-auto my-6 space-y-4 shadow-sm">
+            <div className="w-16 h-16 rounded-2xl bg-[#EEDBCA]/40 text-[#0E2419] border border-[#EEDBCA] mx-auto flex items-center justify-center">
+              <Sparkles className="w-8 h-8 text-[#0E2419]" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[#0F1713]">
+                {mandates.length === 0 ? 'No Mandates in this Account Yet' : 'No mandates match this filter'}
+              </h3>
+              <p className="text-xs text-[#64756B] max-w-md mx-auto mt-1 leading-relaxed">
+                {mandates.length === 0
+                  ? 'Upload your bank statement (CSV or PDF) to discover recurring auto-debits, or load our pre-configured demo portfolio to test the radar.'
+                  : 'Select another filter above or reset to view all.'}
+              </p>
+            </div>
+            {mandates.length === 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                {onUploadStatement && (
+                  <button
+                    onClick={onUploadStatement}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#0E2419] text-[#2DE2B5] font-semibold text-xs flex items-center justify-center gap-2 hover:bg-[#163826] cursor-pointer shadow-sm transition-colors"
+                  >
+                    <span>Upload Bank Statement</span>
+                  </button>
+                )}
+                {onLoadDemoData && (
+                  <button
+                    onClick={onLoadDemoData}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#EEDBCA] text-[#0E2419] font-bold text-xs flex items-center justify-center gap-2 hover:bg-[#E4D1BC] cursor-pointer shadow-sm transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#0E2419]" />
+                    <span>Load Demo Portfolio (₹65,623)</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
