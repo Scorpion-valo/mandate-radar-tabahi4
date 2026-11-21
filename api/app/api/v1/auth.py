@@ -172,14 +172,17 @@ def send_otp(req: SendOtpRequest):
         except Exception:
             pass
             
-    return {
+    resp = {
         "success": True,
         "phone": f"+91 {phone_10}",
-        "otp": otp_code,
         "sms_dispatched": sms_sent,
         "message": f"Verification code sent to +91 {phone_10}",
         "expires_in": 300
     }
+    # Only expose preview code in testing/development environments
+    if os.getenv("ENVIRONMENT") == "development" or os.getenv("TESTING") == "1" or not fast2sms_key:
+        resp["preview_code"] = otp_code
+    return resp
 
 @router.post("/otp/verify", response_model=TokenResponse)
 def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
@@ -187,13 +190,12 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
     phone_10 = clean_digits[-10:] if len(clean_digits) >= 10 else clean_digits
     
     record = OTP_CACHE.get(phone_10)
-    # Also support fallback 482910 if user used manual test code
-    valid_code = (record and record["otp"] == req.otp.strip()) or req.otp.strip() == "482910"
+    valid_code = record is not None and record["otp"] == req.otp.strip()
     
     if not valid_code:
         raise HTTPException(status_code=400, detail="Invalid verification code. Please check the code.")
         
-    if record and time.time() > record["expires_at"] and req.otp.strip() != "482910":
+    if record and time.time() > record["expires_at"]:
         raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new code.")
     
     if phone_10 in OTP_CACHE:

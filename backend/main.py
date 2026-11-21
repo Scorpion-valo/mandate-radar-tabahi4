@@ -294,6 +294,15 @@ async def upload_statement_csv(
         ref_col  = next((cols[k] for k in [
             "ref", "reference", "chq/ref no.", "utr", "txn id", "id", "txnid"
         ] if k in cols), None)
+        channel_col = next((cols[k] for k in [
+            "channel", "rail", "payment_channel", "payment_mode", "mode", "payment_mechanism"
+        ] if k in cols), None)
+        account_col = next((cols[k] for k in [
+            "account_id", "account", "acc_id", "acc", "account_number", "account_label"
+        ] if k in cols), None)
+        merchant_col = next((cols[k] for k in [
+            "merchant", "vendor", "payee", "merchant_name"
+        ] if k in cols), None)
 
         if not date_col or not desc_col or not amt_col:
             raise HTTPException(
@@ -326,7 +335,10 @@ async def upload_statement_csv(
                 "descriptor": desc_raw,
                 "amount": amt_val,
                 "type": "DEBIT",
-                "ref": str(row[ref_col]).strip() if ref_col and pd.notna(row[ref_col]) else ""
+                "ref": str(row[ref_col]).strip() if ref_col and pd.notna(row[ref_col]) else "",
+                "channel": str(row[channel_col]).strip() if channel_col and pd.notna(row[channel_col]) else "",
+                "account_id": str(row[account_col]).strip() if account_col and pd.notna(row[account_col]) else "",
+                "merchant": str(row[merchant_col]).strip() if merchant_col and pd.notna(row[merchant_col]) else ""
             })
 
         if not transactions:

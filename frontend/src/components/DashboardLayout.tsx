@@ -104,12 +104,106 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [searchQuery, setSearchQuery] = useState('')
   const [cypherResult, setCypherResult] = useState<any>(null)
   const [graphMode, setGraphMode] = useState<string>('portfolio')
+  const [statementTxnCount, setStatementTxnCount] = useState<number>(0)
 
   // Local active mandates state so updates reflect immediately
   const [localMandates, setLocalMandates] = useState<Mandate[]>(mandates)
   React.useEffect(() => {
     setLocalMandates(mandates)
   }, [mandates])
+
+  // Build dynamic Neo4j graph reflecting active user mandates
+  const dynamicGraph = React.useMemo(() => {
+    if (!localMandates || localMandates.length === 0) {
+      return graphData
+    }
+
+    const nodes: GraphNode[] = []
+    const edges: GraphEdge[] = []
+    const parentMap = new Map<string, string>()
+    const railMap = new Map<string, string>()
+
+    // 1. Center User Node
+    const centerUserId = 'usr_active_center'
+    nodes.push({
+      id: centerUserId,
+      label: user?.name || 'Active Account',
+      type: 'person',
+      properties: { name: user?.name || 'Active Account', role: 'Account Holder' }
+    })
+
+    localMandates.forEach((m, idx) => {
+      // 2. Merchant / Mandate Node
+      const merchantNodeId = `node_${m.id || idx}`
+      nodes.push({
+        id: merchantNodeId,
+        label: m.merchant_name || m.descriptor,
+        type: 'merchant',
+        properties: {
+          name: m.merchant_name,
+          cost: m.annual_committed_cost,
+          cadence: m.cadence,
+          amount: m.latest_amount,
+          rail: m.mechanism,
+          flag: m.flag
+        }
+      })
+
+      // Edge from User to Merchant
+      edges.push({
+        id: `edge_comm_${idx}`,
+        source: centerUserId,
+        target: merchantNodeId,
+        type: 'COMMITTED_TO',
+        properties: { amount: m.latest_amount, cadence: m.cadence }
+      })
+
+      // 3. Parent Conglomerate Node
+      const parentName = m.parent_name || (m.merchant_name ? m.merchant_name.split(' ')[0] : 'Independent')
+      const parentId = `parent_${parentName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
+      if (!parentMap.has(parentId)) {
+        parentMap.set(parentId, parentName)
+        nodes.push({
+          id: parentId,
+          label: parentName,
+          type: 'parent',
+          properties: { name: parentName }
+        })
+      }
+
+      edges.push({
+        id: `edge_parent_${idx}`,
+        source: merchantNodeId,
+        target: parentId,
+        type: 'OWNED_BY',
+        properties: {}
+      })
+
+      // 4. Payment Rail Node
+      const railCode = m.mechanism || 'UPI_AUTOPAY'
+      const railLabel = m.mechanism_name || (railCode === 'BANK_NACH' ? 'e-NACH Mandate' : railCode === 'UPI_AUTOPAY' ? 'UPI AutoPay' : railCode === 'CARD_SI' ? 'Card Standing Instruction' : 'Direct Merchant')
+      const railId = `rail_${railCode.toLowerCase()}`
+      if (!railMap.has(railId)) {
+        railMap.set(railId, railLabel)
+        nodes.push({
+          id: railId,
+          label: railLabel,
+          type: 'rail',
+          properties: { name: railLabel }
+        })
+      }
+
+      edges.push({
+        id: `edge_rail_${idx}`,
+        source: merchantNodeId,
+        target: railId,
+        type: 'ROUTED_VIA',
+        properties: {}
+      })
+    })
+
+    return { nodes, edges, stats: { merchant_count: localMandates.length, parent_count: parentMap.size } }
+  }, [localMandates, user?.name, graphData])
 
   // Active User Context
   const userId = user?.id || 'usr_primary'
@@ -274,6 +368,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       if (data.mandates && data.mandates.length > 0) {
         setLocalMandates(data.mandates)
         onUpdateMandates?.(data.mandates)
+        const txnCount = data.rows_parsed || data.metrics?.total_transactions || data.mandates.reduce((acc: number, m: Mandate) => acc + (m.charge_count || 1), 0)
+        setStatementTxnCount(txnCount)
         const totalAnnual = data.mandates.reduce((acc: number, m: Mandate) => acc + (m.annual_committed_cost || 0), 0)
         const flaggedCount = data.mandates.filter((m: Mandate) => m.flags && m.flags.length > 0).length
         const potentialSavings = data.mandates.filter((m: Mandate) => m.flags?.includes('unused') || m.flags?.includes('price_creep') || m.flags?.includes('trial_trap')).reduce((acc: number, m: Mandate) => acc + (m.annual_committed_cost || 0), 0)
@@ -419,7 +515,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   {user?.accountLabel || uploadAccountLabel || 'Primary Statement'}
                 </div>
                 <div className="text-[10px] font-mono text-[#BAC8BF]">
-                  {localMandates.length * 14} Txns · {localMandates.length} Active Mandates
+                  {statementTxnCount > 0 ? statementTxnCount : (localMandates.reduce((acc, m) => acc + (m.charge_count || 1), 0) || 77)} Txns · {localMandates.length} Active Mandates
                 </div>
               </div>
             </div>
@@ -768,8 +864,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
               <div className="h-[520px] bg-[#0A100D] border border-[#E8E1D2] rounded-3xl overflow-hidden relative shadow-xl">
                 <GraphCanvas
-                  nodes={graphData.nodes}
-                  edges={graphData.edges}
+                  nodes={dynamicGraph.nodes}
+                  edges={dynamicGraph.edges}
                   currentMode={graphMode}
                   onModeChange={setGraphMode}
                   onNodeClick={() => {}}
