@@ -55,12 +55,12 @@ export default function App() {
       if (saved) return JSON.parse(saved)
     } catch {}
     return {
-      id: 'usr_primary',
-      name: 'Arun Sharma',
-      email: 'arun.sharma@example.com',
-      phone: '+91 98201 48210',
-      accountLabel: 'HDFC Salaried Statement',
-      isDemo: true
+      id: 'usr_new',
+      name: 'New User',
+      email: '',
+      phone: '',
+      accountLabel: 'Primary Statement',
+      isDemo: false
     }
   })
 
@@ -70,10 +70,10 @@ export default function App() {
       const savedUser = localStorage.getItem('mandate_radar_user')
       if (savedUser) {
         const u = JSON.parse(savedUser)
-        if (!isDemoAccount(u)) return []
+        if (isDemoAccount(u)) return SAMPLE_MANDATES
       }
     } catch {}
-    return SAMPLE_MANDATES
+    return []
   })
 
   const [heroMetrics, setHeroMetrics] = useState(() => {
@@ -81,10 +81,10 @@ export default function App() {
       const savedUser = localStorage.getItem('mandate_radar_user')
       if (savedUser) {
         const u = JSON.parse(savedUser)
-        if (!isDemoAccount(u)) return EMPTY_HERO_METRICS
+        if (isDemoAccount(u)) return SAMPLE_HERO_METRICS
       }
     } catch {}
-    return SAMPLE_HERO_METRICS
+    return EMPTY_HERO_METRICS
   })
 
   const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set())
