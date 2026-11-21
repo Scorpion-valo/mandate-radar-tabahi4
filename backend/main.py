@@ -184,15 +184,21 @@ async def upload_statement_csv(file: UploadFile = File(...)):
 
         # Identify columns
         cols = {c.strip().lower(): c for c in df.columns}
-
-        # Date column mapping
-        date_col = next((cols[k] for k in ["date", "txn_date", "transaction date", "value date", "trans date"] if k in cols), None)
-        # Description column mapping
-        desc_col = next((cols[k] for k in ["descriptor", "description", "narration", "particulars", "remarks", "details"] if k in cols), None)
-        # Amount column mapping
-        amt_col = next((cols[k] for k in ["amount", "debit", "withdrawal", "txn amount", "amount (inr)"] if k in cols), None)
-        # Ref column mapping (optional)
-        ref_col = next((cols[k] for k in ["ref", "reference", "chq/ref no.", "utr", "txn id", "id"] if k in cols), None)
+        date_col = next((cols[k] for k in [
+            "date", "transactiontimestamp", "valuedate", "txn_date", 
+            "transaction date", "value date", "trans date", "timestamp", "txn date", "time"
+        ] if k in cols), None)
+        desc_col = next((cols[k] for k in [
+            "descriptor", "description", "narration", "particulars", 
+            "remarks", "details", "txn narration", "transaction narration"
+        ] if k in cols), None)
+        amt_col  = next((cols[k] for k in [
+            "amount", "debit", "withdrawal", "txn amount", "amount (inr)", 
+            "txn_amount", "transaction amount", "dr"
+        ] if k in cols), None)
+        ref_col  = next((cols[k] for k in [
+            "ref", "reference", "chq/ref no.", "utr", "txn id", "id", "txnid"
+        ] if k in cols), None)
 
         if not date_col or not desc_col or not amt_col:
             raise HTTPException(
