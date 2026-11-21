@@ -34,6 +34,7 @@ import {
   Plus
 } from 'lucide-react'
 import type { Mandate, Finding, ReconciliationResult } from '../types'
+import { inr } from '../lib/format'
 import { RadarView } from './RadarView'
 import { MandateDrawer } from './MandateDrawer'
 import { GraphCanvas, type GraphNode, type GraphEdge } from './GraphCanvas'
