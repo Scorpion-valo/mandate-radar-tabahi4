@@ -41,6 +41,18 @@ export default function App() {
     }
   }, [toastNotification])
 
+  // Handle 401 token expiration from apiFetch
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setToastNotification('Session expired or unauthorized. Please sign in.')
+      setStage('opening')
+      setAuthModalMode('signin')
+      setAuthModalOpen(true)
+    }
+    window.addEventListener('mandate_radar_auth_expired', handleAuthExpired)
+    return () => window.removeEventListener('mandate_radar_auth_expired', handleAuthExpired)
+  }, [])
+
   // Current User Session (Persisted in localStorage, production-ready)
   const [currentUser, setCurrentUser] = useState<{
     id: string

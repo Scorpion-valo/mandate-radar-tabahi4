@@ -1366,11 +1366,16 @@ class Neo4jKnowledgeGraph:
             except Exception:
                 cancel_dt = now_dt - timedelta(days=30)
 
+            cadence_str = str(mand.get("cadence", "MONTHLY")).upper()
+            cycle_days = 30 if "MONTH" in cadence_str else (90 if "QUART" in cadence_str else 365)
+
             expected_next_str = mand.get("expected_next_charge_date")
             try:
-                expected_next_dt = datetime.strptime(str(expected_next_str)[:10], "%Y-%m-%d") if expected_next_str else cancel_dt + timedelta(days=30)
+                expected_next_dt = datetime.strptime(str(expected_next_str)[:10], "%Y-%m-%d") if expected_next_str else cancel_dt + timedelta(days=cycle_days)
+                if cancel_dt and expected_next_dt > cancel_dt + timedelta(days=cycle_days):
+                    expected_next_dt = cancel_dt + timedelta(days=cycle_days)
             except Exception:
-                expected_next_dt = cancel_dt + timedelta(days=30)
+                expected_next_dt = cancel_dt + timedelta(days=cycle_days)
 
             mand_desc = mand.get("descriptor", "").strip().lower()
             mand_merchant = mand.get("merchant_id", "")

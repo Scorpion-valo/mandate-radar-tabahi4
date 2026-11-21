@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import type { Mandate, Finding, ReconciliationResult } from '../types'
 import { inr } from '../lib/format'
+import { apiFetch } from '../lib/api'
 import { RadarView } from './RadarView'
 import { MandateDrawer } from './MandateDrawer'
 import { GraphCanvas, type GraphNode, type GraphEdge } from './GraphCanvas'
@@ -253,7 +254,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle mandate cancellation confirmation
   const handleConfirmCancelMandate = async (mandateId: string) => {
     try {
-      await fetch(`/api/mandates/${mandateId}/cancel-confirm?user_id=${userId}`, {
+      await apiFetch(`/api/mandates/${mandateId}/cancel-confirm`, {
         method: 'POST'
       })
     } catch {}
@@ -285,10 +286,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle user scoped tag addition
   const handleAddMandateTag = async (mandateId: string, tag: string) => {
     try {
-      await fetch(`/api/mandates/${mandateId}/tags?user_id=${userId}`, {
+      await apiFetch(`/api/mandates/${mandateId}/tags`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag, user_id: userId })
+        body: JSON.stringify({ tag })
       })
     } catch {}
 
@@ -312,15 +313,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle graph finding decision confirmation
   const handleConfirmFindingDecision = async (findingId: string, keepMandateIds: string[]) => {
     try {
-      await fetch(`/api/findings/${findingId}/decision`, {
+      await apiFetch(`/api/findings/${findingId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           finding_id: findingId,
           finding_type: 'overlap',
           chosen_action: 'keep_selected',
-          confirmed_mandate_ids: keepMandateIds,
-          user_id: userId
+          confirmed_mandate_ids: keepMandateIds
         })
       })
     } catch {}
@@ -354,10 +354,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     const formData = new FormData()
     formData.append('file', file)
     formData.append('account_label', uploadAccountLabel || 'Primary Account')
-    formData.append('user_id', userId)
 
     try {
-      const res = await fetch('/api/statement/upload', {
+      const res = await apiFetch('/api/statement/upload', {
         method: 'POST',
         body: formData
       })
@@ -421,7 +420,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   const runCypher = async () => {
     try {
-      const res = await fetch('/api/graph/cypher', {
+      const res = await apiFetch('/api/graph/cypher', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

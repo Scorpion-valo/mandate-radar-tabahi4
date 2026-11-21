@@ -181,19 +181,27 @@ def analyze_statement(
             if hard_negative_match:
                 break
 
-        # A recurring mandate requires at least 1 annual or >= 2 occurrences
+        # A recurring mandate requires at least 1 annual/subscription occurrence or >= 2 occurrences
         if count == 1:
-            # Check if this single charge matches a known annual subscription in reference
+            # Check if this single charge matches a known subscription in reference
             resolved_ref = resolve_merchant_from_descriptor(sample_desc)
-            if resolved_ref and "ANNUAL" in resolved_ref.get("supported_cadences", []):
-                # Annual mandate registered
+            if resolved_ref and any(c in resolved_ref.get("supported_cadences", []) for c in ["ANNUAL", "MONTHLY"]):
                 amount = float(sorted_group["amount_num"].iloc[0])
-                annual_committed = amount
+                if "MONTHLY" in resolved_ref.get("supported_cadences", []) and (amount <= 500 or resolved_ref.get("default_amount") == amount):
+                    eff_cadence = "MONTHLY"
+                    annual_committed = round(amount * 12.0, 2)
+                elif "ANNUAL" in resolved_ref.get("supported_cadences", []):
+                    eff_cadence = "ANNUAL"
+                    annual_committed = amount
+                else:
+                    eff_cadence = "MONTHLY"
+                    annual_committed = round(amount * 12.0, 2)
+
                 channel_val = sorted_group["channel"].iloc[0] if "channel" in sorted_group.columns else ""
                 mechanism = detect_payment_mechanism(sample_desc, sorted_group["ref_str"].iloc[0], channel_val)
                 mech_details = PAYMENT_MECHANISMS.get(mechanism, PAYMENT_MECHANISMS["DIRECT_MERCHANT"])
                 first_date_dt = sorted_group["date_dt"].iloc[0]
-                expected_next = compute_expected_next_charge_date(first_date_dt, "ANNUAL")
+                expected_next = compute_expected_next_charge_date(first_date_dt, eff_cadence)
 
                 # Prepare charge history with idempotent hashes
                 history = []
@@ -215,7 +223,7 @@ def analyze_statement(
                     "parent_name": resolved_ref.get("parent"),
                     "descriptor": sample_desc,
                     "is_recognized": True,
-                    "cadence": "ANNUAL",
+                    "cadence": eff_cadence,
                     "billing_type": "fixed",
                     "latest_amount": amount,
                     "initial_amount": amount,
@@ -228,7 +236,7 @@ def analyze_statement(
                     "mechanism": mechanism,
                     "mechanism_name": mech_details["name"],
                     "flag": "HEALTHY",
-                    "flag_reason": "Verified active annual contract.",
+                    "flag_reason": f"Verified active {eff_cadence.lower()} contract.",
                     "confidence_score": 0.94,
                     "savings_if_cancelled": annual_committed,
                     "pitfall": resolved_ref.get("cancellation_pitfall", ""),
