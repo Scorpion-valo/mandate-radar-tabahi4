@@ -50,17 +50,24 @@ app.add_middleware(
 
 # Initialize Relational Database & Mount API v1
 db_initialized = False
+db_init_error = None
+
 try:
     from app.core.db import init_db, SessionLocal
     from app.services.seed_service import seed_database
-    from app.api.v1 import api_v1_router
     init_db()
     with SessionLocal() as db_session:
         seed_database(db_session)
-    app.include_router(api_v1_router)
     db_initialized = True
 except Exception as e:
+    db_init_error = str(e)
     print(f"Warning: Database initialization deferred: {e}")
+
+try:
+    from app.api.v1 import api_v1_router
+    app.include_router(api_v1_router)
+except Exception as e:
+    print(f"Warning: Failed to mount api_v1_router: {e}")
 
 # Initialize Neo4j Service
 neo4j_graph = Neo4jKnowledgeGraph()
@@ -128,7 +135,7 @@ def get_api_info():
         "version": "2.0.0",
         "theme": "Fintech - The Auto Debits Nobody Can Find",
         "track": "Neo4j (Best Use of Neo4j)",
-        "database_status": "ACTIVE_PERSISTENT_STORE" if db_initialized else "DEFERRED",
+        "database_status": "ACTIVE_PERSISTENT_STORE" if db_initialized else f"DEFERRED: {db_init_error}",
         "neo4j_status": "CONNECTED" if neo4j_graph.is_connected else "EMBEDDED_GRAPH_MODE",
         "reference_merchants_count": len(REFERENCE_MERCHANTS)
     }

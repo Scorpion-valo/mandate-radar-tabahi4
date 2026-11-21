@@ -76,6 +76,7 @@ interface DashboardLayoutProps {
   onOpenDesignSystem: () => void
   onUpdateMandates?: (mandates: Mandate[]) => void
   onUpdateHeroMetrics?: (metrics: any) => void
+  onLoadSampleData?: () => void
 }
 
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
@@ -91,7 +92,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   onOpenHome,
   onOpenDesignSystem,
   onUpdateMandates,
-  onUpdateHeroMetrics
+  onUpdateHeroMetrics,
+  onLoadSampleData
 }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('portfolio')
   const [selectedMandate, setSelectedMandate] = useState<Mandate | null>(null)
@@ -116,6 +118,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [trialWarningAlert, setTrialWarningAlert] = useState(true)
   const [whatsappAlerts, setWhatsappAlerts] = useState(true)
   const [profileSavedToast, setProfileSavedToast] = useState(false)
+
+  React.useEffect(() => {
+    if (user?.name) setUserName(user.name)
+    if (user?.email) setUserEmail(user.email)
+    if (user?.phone) setUserPhone(user.phone)
+    if (user?.accountLabel) setPrimaryBank(user.accountLabel)
+  }, [user])
 
   const userInitials = userName
     .split(' ')
@@ -674,6 +683,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               onCancelFlagged={onCancelFlagged}
               onClear={onClearCancelled}
               onOpen={m => setSelectedMandate(m)}
+              onUploadStatement={() => setActiveTab('upload')}
+              onLoadDemoData={() => {
+                onLoadSampleData?.()
+                setLocalMandates(mandates.length > 0 ? mandates : visibleMandates)
+              }}
             />
           )}
 
@@ -1550,7 +1564,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                       </button>
 
                       <button
-                        onClick={onOpenHome}
+                        onClick={() => {
+                          try {
+                            localStorage.removeItem('mandate_radar_token')
+                            localStorage.removeItem('mandate_radar_user')
+                          } catch {}
+                          onOpenHome()
+                        }}
                         className="w-full py-2.5 px-3.5 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-xs text-red-600 font-medium flex items-center justify-between transition-all cursor-pointer shadow-sm"
                       >
                         <div className="flex items-center gap-2">
