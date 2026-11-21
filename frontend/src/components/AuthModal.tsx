@@ -584,20 +584,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           /* MODE 3: 6-Digit OTP Verification Form */
           <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
             
-            {/* Live SMS Gateway Notification Card */}
+            {/* Live SMS Verification Card */}
             {generatedOtp && (
-              <div className="p-3.5 rounded-2xl bg-[#0E2419] border border-[#2DE2B5]/50 flex flex-col gap-2 shadow-lg shadow-[#2DE2B5]/10 animate-fade-in">
+              <div className="p-3.5 rounded-2xl bg-[#0E2419] border border-[#2DE2B5]/50 flex flex-col gap-2.5 shadow-lg shadow-[#2DE2B5]/10 animate-fade-in">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="flex items-center gap-1.5 font-semibold text-[#2DE2B5]">
                     <Smartphone className="w-3.5 h-3.5" />
-                    SMS Dispatch Gateway
+                    Instant Verification Code
                   </span>
-                  <span className="text-[10px] text-[#9BAEA2] font-mono">Delivered Just Now</span>
+                  <span className="text-[10px] text-[#2DE2B5] font-mono bg-[#2DE2B5]/10 px-2 py-0.5 rounded-full border border-[#2DE2B5]/20">Active</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="text-xs text-white">
-                    Code sent to <span className="text-[#EEDBCA] font-medium">+91 {phoneNumber.replace(/\D/g, '').slice(-10)}</span>:
-                    <span className="font-mono font-bold text-sm text-[#2DE2B5] tracking-widest ml-2 bg-[#07110C] px-2.5 py-1 rounded-lg border border-[#2DE2B5]/30">
+                    Code for <span className="text-[#EEDBCA] font-medium">+91 {phoneNumber.replace(/\D/g, '').slice(-10)}</span>:
+                    <span className="font-mono font-bold text-base text-[#2DE2B5] tracking-widest ml-2 bg-[#07110C] px-2.5 py-1 rounded-lg border border-[#2DE2B5]/30">
                       {generatedOtp}
                     </span>
                   </div>
@@ -606,16 +606,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     onClick={() => {
                       const digits = generatedOtp.split('')
                       setOtp(digits)
-                      setToastMsg(`Auto-filled code: ${generatedOtp}`)
+                      setToastMsg(`Auto-filled: ${generatedOtp}`)
                     }}
-                    className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-[#2DE2B5] text-[#07110C] hover:brightness-105 transition-all cursor-pointer shrink-0"
+                    className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#2DE2B5] text-[#07110C] hover:brightness-105 transition-all cursor-pointer shrink-0"
                   >
                     Auto-fill
                   </button>
                 </div>
-                <span className="text-[10px] text-[#9BAEA2]">
-                  Instant verification code received. Enter the 6 digits below to open your dashboard.
-                </span>
+                <div className="text-[10px] text-[#9BAEA2] bg-black/30 p-2 rounded-lg border border-white/5 leading-relaxed">
+                  Notice: Carrier cellular SMS requires a registered DLT entity key (TRAI regulation). For rapid evaluation and testing in this prototype, your dynamic 6-digit code is generated and displayed above. Click <strong>Auto-fill</strong> or type the 6 digits below.
+                </div>
               </div>
             )}
 

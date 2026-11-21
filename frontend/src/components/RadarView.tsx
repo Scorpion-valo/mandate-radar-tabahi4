@@ -76,7 +76,9 @@ export function RadarView({
   onToggle,
   onCancelFlagged,
   onClear,
-  onOpen
+  onOpen,
+  onUploadStatement,
+  onLoadDemoData
 }: Props) {
   const [filter, setFilter] = useState<ExtendedFilter>('all')
 
