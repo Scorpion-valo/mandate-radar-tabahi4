@@ -59,6 +59,10 @@ class Neo4jKnowledgeGraph:
             self.driver.verify_connectivity()
             self.is_connected = True
             self.connection_error = None
+            try:
+                self.seed_bundle_reference_graph()
+            except Exception as se:
+                print(f"Auto-seed warning on connect: {se}")
             return True, "Successfully connected to Neo4j instance!"
         except Exception as e:
             self.is_connected = False
@@ -320,64 +324,66 @@ class Neo4jKnowledgeGraph:
         """Seeds curated bundle relationships, plans, and capabilities into live Neo4j Aura."""
         if not (self.is_connected and self.driver):
             return False, "Not connected to live Neo4j instance."
-        cypher = """
-        // 1. Constraints & Unique Indexes
-        CREATE CONSTRAINT unique_merchant_id IF NOT EXISTS FOR (m:Merchant) REQUIRE m.id IS UNIQUE;
-        CREATE CONSTRAINT unique_plan_id IF NOT EXISTS FOR (p:Plan) REQUIRE p.id IS UNIQUE;
-        CREATE CONSTRAINT unique_cap_id IF NOT EXISTS FOR (c:Capability) REQUIRE c.id IS UNIQUE;
-        CREATE CONSTRAINT unique_mandate_id IF NOT EXISTS FOR (mand:Mandate) REQUIRE mand.id IS UNIQUE;
-        CREATE CONSTRAINT unique_decision_key IF NOT EXISTS FOR (d:Decision) REQUIRE d.finding_key IS UNIQUE;
-        CREATE CONSTRAINT unique_narration IF NOT EXISTS FOR (n:Narration) REQUIRE n.normalized IS UNIQUE;
-        CREATE CONSTRAINT unique_pricechange IF NOT EXISTS FOR (pc:PriceChange) REQUIRE pc.id IS UNIQUE;
-        CREATE INDEX merchant_norm IF NOT EXISTS FOR (m:Merchant) ON (m.normalizedName);
-        CREATE INDEX charge_date IF NOT EXISTS FOR (c:Charge) ON (c.date);
-        CREATE INDEX mandate_status IF NOT EXISTS FOR (m:Mandate) ON (m.status);
-
-        // 2. Capabilities
-        UNWIND $capabilities AS c
-        MERGE (cap:Capability {id: c.id})
-          ON CREATE SET cap.name = c.name, cap.category = c.category, cap.description = c.description;
-
-        // 3. Plans & Offers
-        UNWIND $plans AS pl
-        MERGE (plan:Plan {id: pl.id})
-          ON CREATE SET plan.name = pl.name, plan.tier = pl.tier, plan.monthly_cost = pl.monthly_cost, plan.annual_cost = pl.annual_cost
-        WITH pl, plan
-        MATCH (v:Merchant {id: pl.vendor_id})
-        MERGE (v)-[:OFFERS]->(plan);
-
-        // 4. Bundle Inclusions
-        UNWIND $bundles AS b
-        MATCH (plan:Plan {id: b.parent_plan_id}), (c:Merchant {id: b.child_vendor_id})
-        MERGE (plan)-[r:INCLUDES]->(c)
-        SET r.tier = b.tier, r.confidence = b.confidence, r.verified_on = date(b.verified_on), r.source_url = b.source_url, r.notes = b.notes
-        WITH b
-        MATCH (p:Merchant {id: b.parent_vendor_id}), (c:Merchant {id: b.child_vendor_id})
-        MERGE (p)-[r2:INCLUDES]->(c)
-        SET r2.tier = b.tier, r2.confidence = b.confidence, r2.verified_on = date(b.verified_on), r2.source_url = b.source_url, r2.notes = b.notes;
-
-        // 5. Vendor Capabilities
-        UNWIND $vendor_caps AS vc
-        MATCH (v:Merchant {id: vc.vendor_id}), (cap:Capability {id: vc.capability_id})
-        MERGE (v)-[r:PROVIDES]->(cap)
-        SET r.confidence = vc.confidence, r.verified_on = date(vc.verified_on), r.source_url = vc.source_url, r.notes = vc.notes;
-
-        // 6. Reference Price Change for Tariff Revision
-        MERGE (pc:PriceChange {id: 'pc_streamplus_2026'})
-        ON CREATE SET pc.effectiveDate = '2026-02-01', pc.oldAmount = 999.0, pc.newAmount = 1299.0, pc.pct = 30.0, pc.source = '2026 Annual Tariff Revision'
-        WITH pc
-        MATCH (m:Merchant {id: 'streamplus'})
-        MERGE (pc)-[:AFFECTS]->(m);
-        """
+        statements = [
+            ("CREATE CONSTRAINT unique_merchant_id IF NOT EXISTS FOR (m:Merchant) REQUIRE m.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_plan_id IF NOT EXISTS FOR (p:Plan) REQUIRE p.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_cap_id IF NOT EXISTS FOR (c:Capability) REQUIRE c.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_mandate_id IF NOT EXISTS FOR (mand:Mandate) REQUIRE mand.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_decision_key IF NOT EXISTS FOR (d:Decision) REQUIRE d.finding_key IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_narration IF NOT EXISTS FOR (n:Narration) REQUIRE n.normalized IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_pricechange IF NOT EXISTS FOR (pc:PriceChange) REQUIRE pc.id IS UNIQUE", {}),
+            ("CREATE INDEX merchant_norm IF NOT EXISTS FOR (m:Merchant) ON (m.normalizedName)", {}),
+            ("CREATE INDEX charge_date IF NOT EXISTS FOR (c:Charge) ON (c.date)", {}),
+            ("CREATE INDEX mandate_status IF NOT EXISTS FOR (m:Mandate) ON (m.status)", {}),
+            (
+                """UNWIND $capabilities AS c
+                MERGE (cap:Capability {id: c.id})
+                  ON CREATE SET cap.name = c.name, cap.category = c.category, cap.description = c.description""",
+                {"capabilities": CAPABILITIES}
+            ),
+            (
+                """UNWIND $plans AS pl
+                MERGE (plan:Plan {id: pl.id})
+                  ON CREATE SET plan.name = pl.name, plan.tier = pl.tier, plan.monthly_cost = pl.monthly_cost, plan.annual_cost = pl.annual_cost
+                WITH pl, plan
+                MERGE (v:Merchant {id: pl.vendor_id})
+                MERGE (v)-[:OFFERS]->(plan)""",
+                {"plans": PLANS}
+            ),
+            (
+                """UNWIND $bundles AS b
+                MERGE (plan:Plan {id: b.parent_plan_id})
+                MERGE (c:Merchant {id: b.child_vendor_id})
+                MERGE (plan)-[r:INCLUDES]->(c)
+                SET r.tier = b.tier, r.confidence = b.confidence, r.source_url = b.source_url, r.notes = b.notes
+                WITH b
+                MERGE (p:Merchant {id: b.parent_vendor_id})
+                MERGE (c2:Merchant {id: b.child_vendor_id})
+                MERGE (p)-[r2:INCLUDES]->(c2)
+                SET r2.tier = b.tier, r2.confidence = b.confidence, r2.source_url = b.source_url, r2.notes = b.notes""",
+                {"bundles": CURATED_BUNDLES}
+            ),
+            (
+                """UNWIND $vendor_caps AS vc
+                MERGE (v:Merchant {id: vc.vendor_id})
+                MERGE (cap:Capability {id: vc.capability_id})
+                MERGE (v)-[r:PROVIDES]->(cap)
+                SET r.confidence = vc.confidence, r.source_url = vc.source_url, r.notes = vc.notes""",
+                {"vendor_caps": VENDOR_CAPABILITIES}
+            ),
+            (
+                """MERGE (pc:PriceChange {id: 'pc_streamplus_2026'})
+                ON CREATE SET pc.effectiveDate = '2026-02-01', pc.oldAmount = 999.0, pc.newAmount = 1299.0, pc.pct = 30.0, pc.source = '2026 Annual Tariff Revision'
+                WITH pc
+                MERGE (m:Merchant {id: 'streamplus'})
+                MERGE (pc)-[:AFFECTS]->(m)""",
+                {}
+            )
+        ]
         try:
             with self.driver.session() as session:
-                session.run(
-                    cypher,
-                    capabilities=CAPABILITIES,
-                    plans=PLANS,
-                    bundles=CURATED_BUNDLES,
-                    vendor_caps=VENDOR_CAPABILITIES
-                )
+                for stmt, params in statements:
+                    session.run(stmt, **params)
                 return True, "Successfully seeded reference graph (Capabilities, Plans, Inclusions, and Provides) into Neo4j Aura."
         except Exception as e:
             return False, f"Failed to seed reference graph into Neo4j Aura: {str(e)}"
@@ -747,6 +753,7 @@ class Neo4jKnowledgeGraph:
                 "flag_reason": mand.get("flag_reason", ""),
                 "descriptor": mand.get("descriptor", ""),
                 "merchant_id": mand.get("merchant_id"),
+                "merchant_name": mand.get("merchant_name") or mand.get("descriptor") or mand.get("merchant_id"),
                 "mechanism": mand.get("mechanism", "CARD_SI"),
                 "expected_next_charge_date": expected_next,
                 "cancel_confirmed_at": cancel_confirmed_at,
@@ -789,7 +796,7 @@ class Neo4jKnowledgeGraph:
                 WITH mand, m
                 WHERE m.merchant_id IS NOT NULL
                 MERGE (merch:Merchant {id: m.merchant_id})
-                SET merch:Vendor
+                SET merch:Vendor, merch.name = coalesce(m.merchant_name, merch.name, m.merchant_id)
                 MERGE (mand)-[:FOR]->(merch)
                 MERGE (mand)-[:CHARGES]->(merch);
                 """
@@ -840,7 +847,7 @@ class Neo4jKnowledgeGraph:
         MATCH path = (a)-[:OFFERS|INCLUDES*1..6]->(b)
         RETURN ma, mb, a, b,
                [n in nodes(path) | coalesce(n.name, n.id)] AS path_names,
-               [r in relationships(path) | {confidence: coalesce(r.confidence, 'confirmed_public'), notes: coalesce(r.notes, ''), source_url: coalesce(r.source_url, 'TODO: fill link'), verified_on: coalesce(str(r.verified_on), DEFAULT_VERIFIED_DATE)}] AS path_rels
+               [r in relationships(path) | {confidence: coalesce(r.confidence, 'confirmed_public'), notes: coalesce(r.notes, ''), source_url: coalesce(r.source_url, 'TODO: fill link'), verified_on: coalesce(toString(r.verified_on), DEFAULT_VERIFIED_DATE)}] AS path_rels
         """
 
         if self.is_connected and self.driver:
@@ -1455,10 +1462,10 @@ class Neo4jKnowledgeGraph:
             try:
                 cypher = """
                 MATCH (:Person {id:$uid})-[:HOLDS]->(:Account)-[:HAS_MANDATE]->(md:Mandate {status:'active'})-[:CHARGES]->(m:Merchant)
-                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp:ParentCorp)
+                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp)
                 MATCH (pc:PriceChange)-[:AFFECTS]->(t)
                 WHERE pc.pct > $min_pct AND (t = md OR t = m OR t = corp)
-                RETURN md.id AS mandateId, m.name AS merchantName, pc.pct AS pct,
+                RETURN md.id AS mandateId, coalesce(m.name, md.merchant_name, 'Merchant') AS merchantName, pc.pct AS pct,
                        coalesce(pc.newAmount - pc.oldAmount, md.amount * pc.pct / 100.0) * coalesce(md.cyclesPerYear, 12) AS extraPerYear;
                 """
                 with self.driver.session() as session:
@@ -1533,8 +1540,9 @@ class Neo4jKnowledgeGraph:
             try:
                 cypher = """
                 MATCH (:Person {id:$uid})-[:HOLDS]->(:Account)-[:HAS_MANDATE]->(md:Mandate {status:'active'})-[:CHARGES]->(m:Merchant)
-                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp:ParentCorp)
-                RETURN coalesce(corp.name, m.name) AS owner, collect(DISTINCT m.name) AS services,
+                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp)
+                RETURN coalesce(corp.name, m.name, md.merchant_name, 'Independent') AS owner,
+                       collect(DISTINCT coalesce(m.name, md.merchant_name, m.id)) AS services,
                        sum(md.amount*coalesce(md.cyclesPerYear, 12)) AS annualExposure
                 ORDER BY annualExposure DESC;
                 """
@@ -1590,13 +1598,23 @@ class Neo4jKnowledgeGraph:
         if self.is_connected and self.driver:
             try:
                 cypher = """
-                MATCH (md:Mandate {status:'marked_cancelled'})-[:HAS_CHARGE]->(c:Charge)
-                WHERE c.date > md.cancellationDate + duration({days:$graceDays})
-                RETURN md.id AS mandateId, c.id AS chargeId, c.date AS chargeDate, c.amount AS amount;
+                MATCH (p:Person {id:$uid})
+                MATCH (p)-[:HAS_MANDATE|HOLDS*1..2]->(md:Mandate)-[:HAS_CHARGE]->(c:Charge)
+                WHERE md.status IN ['marked_cancelled', 'cancel_confirmed_by_user', 'still_charging']
+                  AND date(substring(toString(c.date), 0, 10)) > date(substring(toString(md.cancellationDate), 0, 10)) + duration({days:$graceDays})
+                RETURN DISTINCT md.id AS mandateId, c.id AS chargeId, toString(c.date) AS chargeDate, c.amount AS amount;
                 """
                 with self.driver.session() as session:
-                    res = session.run(cypher, graceDays=grace_days)
-                    return [r.data() for r in res]
+                    res = session.run(cypher, uid=uid, graceDays=grace_days)
+                    seen_pairs = set()
+                    unique_results = []
+                    for r in res:
+                        d = r.data()
+                        pair = (d.get("mandateId"), d.get("chargeId"))
+                        if pair not in seen_pairs:
+                            seen_pairs.add(pair)
+                            unique_results.append(d)
+                    return unique_results
             except Exception as e:
                 print(f"Live Aura post-cancellation query deferred: {e}")
 
@@ -1620,10 +1638,12 @@ class Neo4jKnowledgeGraph:
             grace_limit = c_date + timedelta(days=grace_days)
 
             # Find all charges for this mandate
+            seen_charge_ids = set()
             for e in self.edges:
                 if e["source"] == md["id"] and e["type"] in ["HAD_CHARGE", "HAS_CHARGE"]:
                     ch_node = next((n for n in self.nodes if n["id"] == e["target"]), None)
-                    if ch_node:
+                    if ch_node and ch_node["id"] not in seen_charge_ids:
+                        seen_charge_ids.add(ch_node["id"])
                         ch_props = ch_node.get("properties", {})
                         ch_date_str = str(ch_props.get("date", ""))[:10]
                         try:
@@ -1805,11 +1825,16 @@ class Neo4jKnowledgeGraph:
             except Exception:
                 cancel_dt = now_dt - timedelta(days=30)
 
+            cadence_str = str(mand.get("cadence", "MONTHLY")).upper()
+            cycle_days = 30 if "MONTH" in cadence_str else (90 if "QUART" in cadence_str else 365)
+
             expected_next_str = mand.get("expected_next_charge_date")
             try:
-                expected_next_dt = datetime.strptime(str(expected_next_str)[:10], "%Y-%m-%d") if expected_next_str else cancel_dt + timedelta(days=30)
+                expected_next_dt = datetime.strptime(str(expected_next_str)[:10], "%Y-%m-%d") if expected_next_str else cancel_dt + timedelta(days=cycle_days)
+                if cancel_dt and expected_next_dt > cancel_dt + timedelta(days=cycle_days):
+                    expected_next_dt = cancel_dt + timedelta(days=cycle_days)
             except Exception:
-                expected_next_dt = cancel_dt + timedelta(days=30)
+                expected_next_dt = cancel_dt + timedelta(days=cycle_days)
 
             mand_desc = mand.get("descriptor", "").strip().lower()
             mand_merchant = mand.get("merchant_id", "")

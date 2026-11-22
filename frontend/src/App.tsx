@@ -41,6 +41,18 @@ export default function App() {
     }
   }, [toastNotification])
 
+  // Handle 401 token expiration from apiFetch
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setToastNotification('Session expired or unauthorized. Please sign in.')
+      setStage('opening')
+      setAuthModalMode('signin')
+      setAuthModalOpen(true)
+    }
+    window.addEventListener('mandate_radar_auth_expired', handleAuthExpired)
+    return () => window.removeEventListener('mandate_radar_auth_expired', handleAuthExpired)
+  }, [])
+
   // Current User Session (Persisted in localStorage, production-ready)
   const [currentUser, setCurrentUser] = useState<{
     id: string
@@ -100,8 +112,8 @@ export default function App() {
     if (isDemoAccount(currentUser)) {
       fetchInitialData(currentUser)
     }
-    loadSampleGraph()
-  }, [])
+    loadSampleGraph(currentUser?.name && currentUser.name !== 'New User' ? currentUser.name : 'Rahul Sharma')
+  }, [currentUser?.name])
 
   const fetchInitialData = async (userToFetch = currentUser) => {
     if (!isDemoAccount(userToFetch)) {
@@ -173,9 +185,9 @@ export default function App() {
     setToastNotification('Demo portfolio loaded (10 mandates, ₹65,623/year)')
   }
 
-  const loadSampleGraph = () => {
+  const loadSampleGraph = (userName = (currentUser?.name && currentUser.name !== 'New User' ? currentUser.name : 'Rahul Sharma')) => {
     const sampleNodes: GraphNode[] = [
-      { id: 'usr-1', label: 'User', type: 'user', properties: { name: 'Rahul Sharma' } },
+      { id: 'usr-1', label: 'Account Holder', name: userName, type: 'person', properties: { name: userName } },
       { id: 'p-alpha', label: 'Alphabet Inc', type: 'parent', properties: { name: 'Alphabet Inc', country: 'US' } },
       { id: 'p-amz', label: 'Amazon.com Inc', type: 'parent', properties: { name: 'Amazon.com Inc', country: 'US' } },
       { id: 'p-dis', label: 'Disney', type: 'parent', properties: { name: 'The Walt Disney Co', country: 'US' } },

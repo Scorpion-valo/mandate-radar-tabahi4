@@ -2,7 +2,7 @@
 API v1 External Integrations Endpoints (SMS & Gmail)
 Full OAuth 2.0 lifecycle, incremental sync, Android device pairing, and encrypted token management.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Body
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -188,6 +188,25 @@ def handle_gmail_oauth_callback(
         "success": True,
         "message": f"Successfully connected Gmail ({email_addr})",
         "initial_sync": sync_res
+    }
+
+@router.post("/gmail/sync")
+def sync_gmail_mock(payload: Dict[str, Any] = Body(...)):
+    """
+    Direct parsing endpoint for email message batches (used for testing and direct integrations).
+    """
+    records = []
+    for msg in payload.get("messages", []):
+        parsed = GmailSyncService.parse_email(
+            subject=msg.get("subject", ""),
+            sender=msg.get("sender", ""),
+            body=msg.get("body", "")
+        )
+        if parsed.get("is_financial"):
+            records.append(parsed)
+    return {
+        "financial_receipts_found": len(records),
+        "receipts": records
     }
 
 @router.post("/gmail/sync-now")
