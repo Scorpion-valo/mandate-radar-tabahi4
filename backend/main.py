@@ -15,8 +15,11 @@ import csv
 import re
 import pandas as pd
 
-from app.api.v1.auth import get_current_user
+from app.deps.auth import get_current_user
 from app.models.user import User
+from app.models.mandate import Mandate
+from app.core.db import get_db
+from sqlalchemy.orm import Session
 
 from reference_data import REFERENCE_MERCHANTS, PARENT_COMPANIES, PAYMENT_MECHANISMS, ESCALATION_CHAIN
 from synthetic_data import (
@@ -35,11 +38,17 @@ from detector import (
 )
 from neo4j_service import Neo4jKnowledgeGraph
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from app.api.v1.auth import limiter
+
 app = FastAPI(
     title="Mandate Radar API",
     description="Deterministic Auto-Debit Mandate Detection & Neo4j Knowledge Graph Engine",
     version="2.0.0"
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS configuration with environment variable override
 cors_origins_env = os.getenv("CORS_ORIGINS", "")
@@ -253,6 +262,7 @@ async def upload_statement_csv(
     validates headers, handles empty or malformed files, runs detection,
     executes Neo4j bundle overlap, capability overlap, and duplicate vendor analyses,
     and performs post-cancellation reconciliation with 3-day grace window.
+    Strictly protected with JWT Bearer authentication.
     """
     try:
         # Security Guard: Validate file extension
@@ -270,7 +280,7 @@ async def upload_statement_csv(
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail="File size exceeds the 25MB maximum limit.")
 
-        # Security Guard: Sanitize tenant identifier from authenticated user
+        # Derive sanitized tenant identifier strictly from authenticated user token
         uid = str(current_user.id)
         safe_uid = "".join(c for c in uid if c.isalnum() or c in ("_", "-"))
         safe_account_label = (account_label or "Primary Account").strip()[:100]
@@ -318,6 +328,15 @@ async def upload_statement_csv(
 
         ref_col = next((cols[k] for k in [
             "ref", "reference", "chq/ref no.", "utr", "txn id", "id", "txnid"
+        ] if k in cols), None)
+        channel_col = next((cols[k] for k in [
+            "channel", "rail", "payment_channel", "payment_mode", "mode", "payment_mechanism"
+        ] if k in cols), None)
+        account_col = next((cols[k] for k in [
+            "account_id", "account", "acc_id", "acc", "account_number", "account_label"
+        ] if k in cols), None)
+        merchant_col = next((cols[k] for k in [
+            "merchant", "vendor", "payee", "merchant_name"
         ] if k in cols), None)
 
         if not date_col or not desc_col or not amt_col:
@@ -399,13 +418,24 @@ async def upload_statement_csv(
                     blank_or_zero += 1
                     continue
 
+            desc_raw = str(row[desc_col]).strip() if pd.notna(row[desc_col]) else ""
+            if not desc_raw or desc_raw.lower() in ("nan", "none", "null", "undefined", ""):
+                continue
+
+            date_val = str(row.get("iso_date", row[date_col])).strip()
+            if not date_val or date_val.lower() in ("nan", "none", "null", ""):
+                continue
+
             transactions.append({
                 "id": f"CSV_ROW_{idx+1}",
-                "date": str(row["iso_date"]),
-                "descriptor": str(row[desc_col]).strip(),
+                "date": date_val[:10],
+                "descriptor": desc_raw,
                 "amount": round(amt_val, 2),
                 "type": "DEBIT",
-                "ref": str(row[ref_col]).strip() if ref_col and pd.notna(row[ref_col]) else ""
+                "ref": str(row[ref_col]).strip() if ref_col and pd.notna(row[ref_col]) else "",
+                "channel": str(row[channel_col]).strip() if channel_col and pd.notna(row[channel_col]) else "",
+                "account_id": str(row[account_col]).strip() if account_col and pd.notna(row[account_col]) else "",
+                "merchant": str(row[merchant_col]).strip() if merchant_col and pd.notna(row[merchant_col]) else ""
             })
 
         parse_report = {
@@ -424,7 +454,6 @@ async def upload_statement_csv(
                 status_code=400,
                 detail=f"No valid debit transactions could be parsed. Parsed 0 of {rows_total} rows ({credits_dropped} credits dropped, {blank_or_zero} zero/blank, {invalid_amount} invalid)."
             )
-
         uid = str(current_user.id)
         acc_label = account_label or "Primary Account"
 
@@ -566,6 +595,7 @@ def get_all_findings(
     2. Capability Overlaps (PROVIDES clustering with anti-self-bundle & staleness threshold)
     3. Duplicate Vendors across Accounts
     4. Flagged Mandates (Price hikes, trial traps, zombies from detector)
+    Strictly scoped to authenticated current_user.
     """
     user_id = str(current_user.id)
     bundle_overlaps = neo4j_graph.find_bundle_overlaps(uid=user_id)
@@ -798,15 +828,37 @@ def record_overlap_decision(
 @app.get("/api/mandates")
 def get_mandates_portfolio(
     uid: Optional[str] = None,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Returns user's mandates with graph-tracked lifecycle statuses:
     active, flagged, keep_confirmed, suggested_cancel, marked_cancelled,
     still_charging, verified_cancelled.
+    Strictly scoped to authenticated current_user.
     """
     user_id = str(current_user.id)
     portfolio = neo4j_graph.get_user_mandates(user_id)
+    if not portfolio:
+        sql_mandates = db.query(Mandate).filter(Mandate.user_id == user_id).all()
+        if sql_mandates:
+            portfolio = [
+                {
+                    "id": m.id,
+                    "merchant_name": m.merchant_name,
+                    "merchant_id": m.merchant_id,
+                    "descriptor": m.descriptor,
+                    "cadence": m.cadence,
+                    "amount": float(m.latest_amount) if m.latest_amount else 0.0,
+                    "latest_amount": float(m.latest_amount) if m.latest_amount else 0.0,
+                    "annual_committed": float(m.annual_committed_cost) if m.annual_committed_cost else 0.0,
+                    "annual_committed_cost": float(m.annual_committed_cost) if m.annual_committed_cost else 0.0,
+                    "flag": m.flag,
+                    "status": m.status,
+                    "user_id": m.user_id,
+                }
+                for m in sql_mandates
+            ]
     return {
         "user_id": user_id,
         "total_mandates": len(portfolio),
@@ -837,12 +889,13 @@ def tag_mandate(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Tags a mandate with user-defined labels (scoped to user_id).
+    Tags a mandate with user-defined labels (scoped to current_user.id).
     """
     user_id = str(current_user.id)
     if not neo4j_graph.user_owns_mandate(user_id, mandate_id):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to modify this mandate.")
-    return neo4j_graph.add_mandate_tags(uid=user_id, mandate_id=mandate_id, tags=req.tags)
+    tags = req.tags if hasattr(req, "tags") and req.tags else ([req.tag] if getattr(req, "tag", None) else [])
+    return neo4j_graph.add_mandate_tags(uid=user_id, mandate_id=mandate_id, tags=tags)
 
 @app.get("/api/spend-summary")
 def get_spend_summary(
@@ -993,7 +1046,10 @@ def get_graph_data(mode: str = "portfolio", current_user: User = Depends(get_cur
     return neo4j_graph.get_graph_visualization_data(filter_mode=mode, uid=user_id)
 
 @app.post("/api/graph/cypher")
-def execute_cypher_query(req: CypherQueryRequest, current_user: User = Depends(get_current_user)):
+def execute_cypher_query(
+    req: CypherQueryRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Executes a strictly read-only Cypher query on Neo4j."""
     query = req.query.strip()
     if not query:
@@ -1008,8 +1064,8 @@ def execute_cypher_query(req: CypherQueryRequest, current_user: User = Depends(g
     return neo4j_graph.run_cypher_query(query)
 
 @app.get("/api/graph/seed")
-def download_cypher_seed():
-    """Generates and returns the complete Cypher seed script (.cql)."""
+def download_cypher_seed(current_user: User = Depends(get_current_user)):
+    """Generates and returns the complete Cypher seed script (.cql). Protected."""
     script = neo4j_graph.generate_cypher_seed_script()
     return {
         "filename": "mandate_radar_neo4j_seed.cql",
@@ -1019,7 +1075,11 @@ def download_cypher_seed():
     }
 
 @app.post("/api/neo4j/connect")
-def connect_neo4j(req: Neo4jConnectRequest, current_user: User = Depends(get_current_user)):
+@app.post("/api/neo4j/connect")
+def connect_neo4j(
+    req: Neo4jConnectRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Connects to live Neo4j Aura or local instance (Admin only)."""
     if getattr(current_user, "email", "") != "admin@mandateradar.in" and not getattr(current_user, "is_admin", False):
         raise HTTPException(

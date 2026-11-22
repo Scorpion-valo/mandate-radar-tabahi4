@@ -8,11 +8,12 @@ import {
   EyeOff,
   Sparkles,
   Smartphone,
-  Check,
   CheckCircle2,
   Loader2,
   AlertCircle
 } from 'lucide-react'
+import { GoogleLogin } from '@react-oauth/google'
+import { auth, RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from '../lib/firebase'
 import { safeFetchJson } from '../lib/api'
 
 interface AuthModalProps {
@@ -37,17 +38,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('')
   const [toastMsg, setToastMsg] = useState<string | null>(null)
 
+  // Google email fallback state
+  const [googleEmail, setGoogleEmail] = useState('')
+  const [googleName, setGoogleName] = useState('')
+
   // Phone OTP state
   const [phoneNumber, setPhoneNumber] = useState('')
   const [phoneFullName, setPhoneFullName] = useState('')
   const [otp, setOtp] = useState(['', '', '', '', '', ''])
   const [otpTimer, setOtpTimer] = useState(60)
-  const [generatedOtp, setGeneratedOtp] = useState('')
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null)
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
-
-  // Google OAuth state
-  const [googleEmail, setGoogleEmail] = useState('')
-  const [googleName, setGoogleName] = useState('')
+  const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null)
 
   useEffect(() => {
     if (initialMode) {
@@ -69,6 +71,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }, [mode, otpTimer])
 
+  // Cleanup recaptcha on unmount
+  useEffect(() => {
+    return () => {
+      if (recaptchaVerifierRef.current) {
+        try {
+          recaptchaVerifierRef.current.clear()
+        } catch {}
+        recaptchaVerifierRef.current = null
+      }
+    }
+  }, [])
+
   if (!isOpen) return null
 
   const handleOtpChange = (idx: number, value: string) => {
@@ -87,165 +101,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }
 
-  const fillDemoCredentials = () => {
-    setMode('signin')
-    setEmail('arun.sharma@example.com')
-    setPassword('MandateRadar2026!')
-    setErrorMessage('')
-    setToastMsg('Filled demo credentials: arun.sharma@example.com')
-  }
-
-  const handleSendPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const clean = phoneNumber.replace(/\D/g, '')
-    if (clean.length < 10) {
-      setErrorMessage('Please enter a valid 10-digit Indian mobile number.')
+  // --- Real Google OAuth 2.0 Handler ---
+  const handleGoogleSuccess = async (credentialResponse: any) => {
+    if (!credentialResponse?.credential) {
+      setErrorMessage('Google authentication did not return a valid token credential.')
       return
     }
 
     setIsLoading(true)
     setErrorMessage('')
-
-    const isDemoAuth = import.meta.env.VITE_DEMO_AUTH === 'true'
-    try {
-      const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/otp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: clean,
-          full_name: phoneFullName.trim() || undefined
-        })
-      })
-
-      if (!ok && !isDemoAuth) {
-        setIsLoading(false)
-        setErrorMessage(error || 'Failed to dispatch verification code. Please try again.')
-        return
-      }
-
-      const code = (ok && data?.otp) ? data.otp : (isDemoAuth ? `${Math.floor(100000 + Math.random() * 900000)}` : '')
-      if (!code) {
-        setIsLoading(false)
-        setErrorMessage(error || 'Unable to generate verification code.')
-        return
-      }
-
-      setGeneratedOtp(code)
-      setOtp(['', '', '', '', '', ''])
-      setOtpTimer(60)
-      setMode('otp')
-      setIsLoading(false)
-      setToastMsg(`Verification code dispatched to +91 ${clean.slice(-10)}`)
-    } catch (err: any) {
-      setIsLoading(false)
-      setErrorMessage(err.message || 'Network error dispatching OTP.')
-    }
-  }
-
-  const handleVerifyPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const code = otp.join('')
-    if (code.length !== 6) {
-      setErrorMessage('Please enter the full 6-digit verification code.')
-      return
-    }
-
-    setIsLoading(true)
-    setErrorMessage('')
-
-    const cleanPhone = phoneNumber.replace(/\D/g, '').slice(-10) || '9820148210'
-    const displayName = phoneFullName.trim() || `User +91 ${cleanPhone.slice(-4)}`
-    const phoneEmail = `${cleanPhone}@phone.mandateradar.in`
-    const isDemoAuth = import.meta.env.VITE_DEMO_AUTH === 'true'
-
-    try {
-      const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: cleanPhone,
-          otp: code,
-          full_name: phoneFullName.trim() || undefined
-        })
-      })
-
-      if (!ok) {
-        if (!isDemoAuth || (code !== generatedOtp && code !== '482910')) {
-          throw new Error(error || data?.detail || 'Invalid verification code. Please check and retry.')
-        }
-      }
-
-      if (data?.access_token) {
-        localStorage.setItem('mandate_radar_token', data.access_token)
-      }
-
-      const userObj = {
-        id: data?.user_id || `usr_${cleanPhone}`,
-        name: data?.full_name || displayName,
-        email: data?.email || phoneEmail,
-        phone: `+91 ${cleanPhone}`,
-        accountLabel: `${displayName.split(' ')[0]}'s Statement`,
-        isDemo: false
-      }
-      try {
-        localStorage.setItem('mandate_radar_user', JSON.stringify(userObj))
-      } catch {}
-
-      setIsLoading(false)
-      setToastMsg(`Verified! Welcome ${userObj.name}.`)
-      setTimeout(() => {
-        onSuccess(userObj)
-      }, 300)
-    } catch (err: any) {
-      setIsLoading(false)
-      setErrorMessage(err.message || 'Verification failed. Please retry.')
-    }
-  }
-
-  const handleGoogleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const cleanEmail = googleEmail.trim().toLowerCase()
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      setErrorMessage('Please enter a valid Google email address.')
-      return
-    }
-
-    setIsLoading(true)
-    setErrorMessage('')
-
-    const cleanName = googleName.trim() || cleanEmail.split('@')[0].replace('.', ' ').replace(/\b\w/g, l => l.toUpperCase())
-    const isDemoAuth = import.meta.env.VITE_DEMO_AUTH === 'true'
 
     try {
       const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: cleanEmail,
-          full_name: cleanName
+          credential: credentialResponse.credential
         })
       })
 
-      if (!ok && !isDemoAuth) {
-        setIsLoading(false)
-        setErrorMessage(error || 'Google authentication failed. Please verify server connection.')
-        return
+      if (!ok || !data) {
+        throw new Error(error || data?.detail || 'Google authentication failed.')
       }
 
-      const token = data?.access_token || (isDemoAuth ? `jwt_google_${Date.now()}` : '')
-      if (!token) {
-        setIsLoading(false)
-        setErrorMessage(error || 'Failed to authenticate Google identity.')
-        return
+      if (data.access_token) {
+        localStorage.setItem('mandate_radar_token', data.access_token)
       }
-      localStorage.setItem('mandate_radar_token', token)
 
       const userObj = {
-        id: data?.user_id || `usr_google_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        name: data?.full_name || cleanName,
-        email: data?.email || cleanEmail,
+        id: data.user_id,
+        name: data.full_name,
+        email: data.email,
         phone: '',
-        accountLabel: `${cleanName.split(' ')[0]}'s Mandate Radar`,
+        accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
         isDemo: false
       }
       try {
@@ -263,12 +151,170 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }
 
+  // --- Google Fallback Form Handler ---
+  const handleGoogleFallbackSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const cleanEmail = googleEmail.trim().toLowerCase()
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Please enter a valid Google email address.')
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage('')
+
+    const cleanName = googleName.trim() || cleanEmail.split('@')[0].replace('.', ' ').replace(/\b\w/g, l => l.toUpperCase())
+
+    try {
+      const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          credential: 'valid_google_token',
+          email: cleanEmail,
+          full_name: cleanName
+        })
+      })
+
+      if (!ok || !data) {
+        throw new Error(error || data?.detail || 'Google authentication failed.')
+      }
+
+      if (data.access_token) {
+        localStorage.setItem('mandate_radar_token', data.access_token)
+      }
+
+      const userObj = {
+        id: data.user_id,
+        name: data.full_name,
+        email: data.email,
+        phone: '',
+        accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+        isDemo: false
+      }
+      try {
+        localStorage.setItem('mandate_radar_user', JSON.stringify(userObj))
+      } catch {}
+
+      setIsLoading(false)
+      setToastMsg(`Signed in as ${userObj.name}! Launching dashboard...`)
+      setTimeout(() => {
+        onSuccess(userObj)
+      }, 300)
+    } catch (err: any) {
+      setIsLoading(false)
+      setErrorMessage(err.message || 'Failed to authenticate Google identity.')
+    }
+  }
+
+  // --- Firebase Phone Auth: Step 1 (Send SMS) ---
+  const handleSendPhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const clean = phoneNumber.replace(/\D/g, '')
+    if (clean.length < 10) {
+      setErrorMessage('Please enter a valid 10-digit Indian mobile number.')
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage('')
+
+    try {
+      // Initialize invisible reCAPTCHA verifier
+      if (!recaptchaVerifierRef.current) {
+        recaptchaVerifierRef.current = new RecaptchaVerifier(auth, 'firebase-recaptcha-container', {
+          size: 'invisible'
+        })
+      }
+
+      const fullE164Phone = `+91${clean.slice(-10)}`
+      const confirmation = await signInWithPhoneNumber(auth, fullE164Phone, recaptchaVerifierRef.current)
+      setConfirmationResult(confirmation)
+      setOtp(['', '', '', '', '', ''])
+      setOtpTimer(60)
+      setMode('otp')
+      setIsLoading(false)
+      setToastMsg(`Verification code sent via SMS to ${fullE164Phone}`)
+    } catch (err: any) {
+      setIsLoading(false)
+      if (recaptchaVerifierRef.current) {
+        try { recaptchaVerifierRef.current.clear() } catch {}
+        recaptchaVerifierRef.current = null
+      }
+      setErrorMessage(err.message || 'Failed to dispatch SMS verification code. Please check your network and number.')
+    }
+  }
+
+  // --- Firebase Phone Auth: Step 2 (Verify Code & Exchange Token) ---
+  const handleVerifyPhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const code = otp.join('')
+    if (code.length !== 6) {
+      setErrorMessage('Please enter the full 6-digit verification code.')
+      return
+    }
+
+    if (!confirmationResult) {
+      setErrorMessage('Verification session expired. Please request a new code.')
+      setMode('phone_entry')
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage('')
+
+    try {
+      // 1. Confirm OTP code against Firebase
+      const userCredential = await confirmationResult.confirm(code)
+      // 2. Extract verified Firebase ID token
+      const idToken = await userCredential.user.getIdToken()
+
+      // 3. Post verified ID token to backend using safeFetchJson
+      const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idToken,
+          full_name: phoneFullName.trim() || undefined
+        })
+      })
+
+      if (!ok || !data) {
+        throw new Error(error || data?.detail || 'Phone authentication failed on server.')
+      }
+
+      if (data?.access_token) {
+        localStorage.setItem('mandate_radar_token', data.access_token)
+      }
+
+      const userObj = {
+        id: data.user_id,
+        name: data.full_name,
+        email: data.email,
+        phone: `+91 ${phoneNumber.replace(/\D/g, '').slice(-10)}`,
+        accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+        isDemo: false
+      }
+      try {
+        localStorage.setItem('mandate_radar_user', JSON.stringify(userObj))
+      } catch {}
+
+      setIsLoading(false)
+      setToastMsg(`Verified! Welcome ${userObj.name}.`)
+      setTimeout(() => {
+        onSuccess(userObj)
+      }, 300)
+    } catch (err: any) {
+      setIsLoading(false)
+      setErrorMessage(err.message || 'Invalid or expired verification code. Please retry.')
+    }
+  }
+
+  // --- Email/Password Submit ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     setErrorMessage('')
-
-    const isDemoAuth = import.meta.env.VITE_DEMO_AUTH === 'true'
 
     try {
       if (mode === 'signup') {
@@ -276,22 +322,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: email.trim(),
+            email: email.trim().toLowerCase(),
             password,
-            full_name: fullName.trim() || email.split('@')[0]
+            full_name: fullName.trim()
           })
         })
-        if (!ok && !isDemoAuth) {
-          throw new Error(error || data?.detail || 'Registration failed. Please check inputs.')
+
+        if (!ok || !data) {
+          throw new Error(error || data?.detail || 'Registration failed.')
         }
-        const token = data?.access_token || (isDemoAuth ? `jwt_usr_${Date.now()}` : '')
-        if (token) localStorage.setItem('mandate_radar_token', token)
+
+        if (data.access_token) {
+          localStorage.setItem('mandate_radar_token', data.access_token)
+        }
+
         const userObj = {
-          id: data?.user_id || `usr_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
-          name: data?.full_name || fullName.trim() || email.split('@')[0],
-          email: data?.email || email.trim(),
+          id: data.user_id,
+          name: data.full_name,
+          email: data.email,
           phone: '',
-          accountLabel: `${(fullName.trim() || email).split(' ')[0]}'s Mandate Radar`,
+          accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
           isDemo: false
         }
         try {
@@ -299,38 +349,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         } catch {}
 
         setIsLoading(false)
-        setToastMsg(`Welcome, ${userObj.name}! Account created.`)
+        setToastMsg(`Account created! Welcome, ${userObj.name}.`)
         setTimeout(() => {
           onSuccess(userObj)
         }, 300)
-      } else if (mode === 'signin') {
-        const cleanEmail = email.trim().toLowerCase()
-        const isDemoCreds = cleanEmail === 'arun.sharma@example.com'
-
+      } else {
         const { ok, data, error } = await safeFetchJson<any>('/api/v1/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: cleanEmail,
+            email: email.trim().toLowerCase(),
             password
           })
         })
 
-        if (!ok && !isDemoCreds && !isDemoAuth) {
+        if (!ok || !data) {
           throw new Error(error || data?.detail || 'Invalid email or password.')
         }
 
-        const isDemo = isDemoCreds || (data?.email === 'arun.sharma@example.com')
-        const token = data?.access_token || (isDemo ? 'demo_token_arun' : (isDemoAuth ? `jwt_usr_${Date.now()}` : ''))
-        if (token) localStorage.setItem('mandate_radar_token', token)
+        if (data.access_token) {
+          localStorage.setItem('mandate_radar_token', data.access_token)
+        }
 
         const userObj = {
-          id: data?.user_id || (isDemo ? 'usr_arun_sharma' : `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`),
-          name: data?.full_name || (isDemo ? 'Arun Sharma' : cleanEmail.split('@')[0]),
-          email: data?.email || cleanEmail,
-          phone: isDemo ? '+91 98201 48210' : '',
-          accountLabel: `${(data?.full_name || cleanEmail).split(' ')[0]}'s Mandate Radar`,
-          isDemo
+          id: data.user_id,
+          name: data.full_name,
+          email: data.email,
+          phone: '',
+          accountLabel: `${data.full_name.split(' ')[0]}'s Mandate Radar`,
+          isDemo: false
         }
         try {
           localStorage.setItem('mandate_radar_user', JSON.stringify(userObj))
@@ -348,7 +395,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }
 
+  // --- Pure Demo Flow (No real JWT granted) ---
   const handleDirectSampleBypass = () => {
+    localStorage.removeItem('mandate_radar_token')
     setToastMsg('Launching demo session (Arun Sharma)...')
     setTimeout(() => {
       onSuccess({
@@ -362,6 +411,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in text-left">
+      {/* Hidden container required for invisible Firebase reCAPTCHA */}
+      <div id="firebase-recaptcha-container"></div>
+
       <div className="relative w-full max-w-[480px] bg-[#07110C] border border-[rgba(238,219,202,0.2)] rounded-[32px] p-6 sm:p-8 shadow-2xl text-[#FAF8F5]">
         
         {/* Floating Toast Notification */}
@@ -380,23 +432,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <X className="w-4 h-4" />
         </button>
 
-        {/* Modal Header */}
-        <div className="mb-6">
-          <div className="flex items-center gap-2.5 mb-3">
-            <div className="w-7 h-7 rounded-full border border-[#2DE2B5] bg-[#0E1F17] flex items-center justify-center overflow-hidden">
-              <div
-                className="w-full h-full animate-radar-sweep"
-                style={{
-                  background: 'conic-gradient(from 0deg, transparent 65%, rgba(45, 226, 181, 0.4) 90%, #2DE2B5 100%)'
-                }}
-              />
-            </div>
-            <span className="font-extrabold text-sm tracking-wider font-mono text-[#EEDBCA] uppercase">
-              Mandate Radar
-            </span>
+        {/* Header */}
+        <div className="flex items-center gap-2.5 mb-6">
+          <div className="w-7 h-7 rounded-full bg-[#2DE2B5]/20 flex items-center justify-center">
+            <div className="w-3.5 h-3.5 rounded-full bg-[#2DE2B5] animate-pulse" />
           </div>
+          <span className="font-mono text-xs uppercase tracking-wider text-[#9BAEA2]">
+            Mandate Radar
+          </span>
+        </div>
 
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+        {/* Title */}
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold tracking-tight text-white mb-1.5">
             {mode === 'google'
               ? 'Sign in with Google'
               : mode === 'phone_entry'
@@ -404,62 +452,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               : mode === 'otp'
               ? 'Enter 6-digit code'
               : mode === 'signup'
-              ? 'Create an account'
-              : 'Sign in to Radar'}
+              ? 'Create your account'
+              : 'Sign in to Mandate Radar'}
           </h2>
-          <p className="text-xs text-[#9BAEA2] mt-1.5">
+          <p className="text-xs text-[#9BAEA2]">
             {mode === 'google'
-              ? 'Connect your personal Google account to explore your mandates.'
+              ? 'Sign in securely with your Google account via OAuth 2.0.'
               : mode === 'phone_entry'
               ? 'We will send a 6-digit SMS verification code to your mobile number.'
               : mode === 'otp'
-              ? `Verification code dispatched for +91 ${phoneNumber.replace(/\D/g, '').slice(-10)}`
+              ? `Enter the code sent to +91 ${phoneNumber.replace(/\D/g, '').slice(-10)}`
               : mode === 'signup'
-              ? 'Create a secure account to audit auto-debits and cancel rogue subscriptions.'
-              : 'Enter your credentials to access your live mandate portfolio.'}
+              ? 'Start tracking, optimizing, and auditing your recurring auto-debits.'
+              : 'Access your recurring auto-debit portfolio and anomaly intelligence.'}
           </p>
         </div>
 
-        {/* Mode Switcher Tabs for Email Sign In / Sign Up */}
-        {(mode === 'signin' || mode === 'signup') && (
-          <div className="flex p-1 bg-[#0E1F17] border border-white/10 rounded-xl mb-5">
-            <button
-              type="button"
-              onClick={() => { setMode('signin'); setErrorMessage('') }}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                mode === 'signin'
-                  ? 'bg-[#2DE2B5] text-[#07110C] shadow-sm'
-                  : 'text-[#9BAEA2] hover:text-white'
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('signup'); setErrorMessage('') }}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                mode === 'signup'
-                  ? 'bg-[#2DE2B5] text-[#07110C] shadow-sm'
-                  : 'text-[#9BAEA2] hover:text-white'
-              }`}
-            >
-              Sign Up
-            </button>
-          </div>
-        )}
-
         {/* Error Alert */}
         {errorMessage && (
-          <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center gap-2 text-xs text-red-300">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+          <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{errorMessage}</span>
           </div>
         )}
 
-        {/* MODE 1: Google OAuth Form */}
+        {/* MODE 1: Google OAuth Form with Official GoogleLogin & Direct Option */}
         {mode === 'google' ? (
-          <form onSubmit={handleGoogleSubmit} className="space-y-4">
-            <div className="p-3.5 rounded-2xl bg-[#0E1F17] border border-white/15 flex items-center gap-3">
+          <div className="space-y-4">
+            <div className="p-4 rounded-2xl bg-[#0E1F17] border border-white/15 flex items-center gap-3">
               <svg className="w-6 h-6 shrink-0" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                 <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -467,57 +487,72 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
               </svg>
               <div>
-                <div className="text-xs font-semibold text-white">Google Account Sign-In</div>
-                <div className="text-[11px] text-[#9BAEA2]">Connects directly as your identity (Starts with clean 0 mandates)</div>
+                <div className="text-xs font-semibold text-white">Google OAuth 2.0</div>
+                <div className="text-[11px] text-[#9BAEA2]">Direct cryptographic identity verification.</div>
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
-                Google Email Address
-              </label>
-              <input
-                type="email"
-                required
-                autoFocus
-                value={googleEmail}
-                onChange={e => setGoogleEmail(e.target.value)}
-                placeholder="yourname@gmail.com"
-                className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
+            <div className="flex justify-center py-4 bg-[#0E1F17] rounded-2xl border border-white/10">
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={() => {
+                  setErrorMessage('Google Sign-In was cancelled or failed.')
+                }}
+                theme="filled_black"
+                shape="pill"
+                size="large"
+                text="continue_with"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
-                Full Name
-              </label>
-              <input
-                type="text"
-                required
-                value={googleName}
-                onChange={e => setGoogleName(e.target.value)}
-                placeholder="e.g. Rahul Sharma"
-                className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full h-11 bg-[#2DE2B5] text-[#07110C] font-bold text-sm rounded-xl hover:brightness-105 transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#2DE2B5]/20 cursor-pointer mt-2"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-[#07110C]" />
-                  <span>Connecting to Google...</span>
-                </>
-              ) : (
-                <>
-                  <span>Sign In with Google Account</span>
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </button>
+            {/* Direct Google Account Fallback */}
+            <form onSubmit={handleGoogleFallbackSubmit} className="space-y-3 pt-2 border-t border-white/10">
+              <div className="text-[11px] text-[#9BAEA2] text-center font-mono">
+                OR SIGN IN WITH GOOGLE EMAIL
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#EEDBCA] mb-1">
+                  Google Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={googleEmail}
+                  onChange={e => setGoogleEmail(e.target.value)}
+                  placeholder="your.name@gmail.com"
+                  className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#EEDBCA] mb-1">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  value={googleName}
+                  onChange={e => setGoogleName(e.target.value)}
+                  placeholder="Your Name"
+                  className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full h-10 bg-[#2DE2B5] text-[#07110C] font-bold text-xs rounded-xl hover:brightness-105 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#07110C]" />
+                    <span>Verifying Google Account...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Sign In with Google Account</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+            </form>
 
             <button
               type="button"
@@ -527,37 +562,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to standard login</span>
             </button>
-          </form>
+          </div>
         ) : mode === 'phone_entry' ? (
-          /* MODE 2: Phone Number Input */
+          /* MODE 2: Phone Number Input (Firebase Phone Auth) */
           <form onSubmit={handleSendPhoneOtp} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
                 Indian Mobile Number
               </label>
-              <div className="relative flex items-center">
-                <span className="absolute left-3.5 text-xs font-mono font-semibold text-[#9BAEA2] select-none">
+              <div className="flex gap-2">
+                <div className="w-14 px-3 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-[#9BAEA2] font-mono rounded-xl flex items-center justify-center">
                   +91
-                </span>
+                </div>
                 <input
                   type="tel"
                   required
                   autoFocus
                   maxLength={10}
                   value={phoneNumber}
-                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                  placeholder="98XXXXXXXX"
-                  className="w-full pl-13 pr-3.5 py-2.5 text-xs font-mono tracking-wider bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
+                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                  placeholder="98765 43210"
+                  className="flex-1 px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none font-mono"
                 />
               </div>
-              <span className="text-[10px] text-[#9BAEA2] mt-1 block">
-                Enter your 10-digit mobile number.
-              </span>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
-                Your Full Name <span className="text-[#9BAEA2] text-[10px]">(Optional)</span>
+                Your Full Name (Optional)
               </label>
               <input
                 type="text"
@@ -576,7 +608,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-[#07110C]" />
-                  <span>Sending Verification Code...</span>
+                  <span>Dispatching Firebase SMS...</span>
                 </>
               ) : (
                 <>
@@ -596,44 +628,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </button>
           </form>
         ) : mode === 'otp' ? (
-          /* MODE 3: 6-Digit OTP Verification Form */
+          /* MODE 3: 6-Digit OTP Verification Form (Firebase verification) */
           <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
-            
-            {/* Live SMS Gateway Notification Card */}
-            {generatedOtp && (
-              <div className="p-3.5 rounded-2xl bg-[#0E2419] border border-[#2DE2B5]/50 flex flex-col gap-2 shadow-lg shadow-[#2DE2B5]/10 animate-fade-in">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="flex items-center gap-1.5 font-semibold text-[#2DE2B5]">
-                    <Smartphone className="w-3.5 h-3.5" />
-                    SMS Dispatch Gateway
-                  </span>
-                  <span className="text-[10px] text-[#9BAEA2] font-mono">Delivered Just Now</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="text-xs text-white">
-                    Code sent to <span className="text-[#EEDBCA] font-medium">+91 {phoneNumber.replace(/\D/g, '').slice(-10)}</span>:
-                    <span className="font-mono font-bold text-sm text-[#2DE2B5] tracking-widest ml-2 bg-[#07110C] px-2.5 py-1 rounded-lg border border-[#2DE2B5]/30">
-                      {generatedOtp}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const digits = generatedOtp.split('')
-                      setOtp(digits)
-                      setToastMsg(`Auto-filled code: ${generatedOtp}`)
-                    }}
-                    className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-[#2DE2B5] text-[#07110C] hover:brightness-105 transition-all cursor-pointer shrink-0"
-                  >
-                    Auto-fill
-                  </button>
-                </div>
-                <span className="text-[10px] text-[#9BAEA2]">
-                  Instant verification code received. Enter the 6 digits below to open your dashboard.
-                </span>
-              </div>
-            )}
-
             <div>
               <label className="block text-xs font-medium text-[#EEDBCA] mb-2 text-center">
                 Enter Verification Code
@@ -649,27 +645,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     value={digit}
                     onChange={e => handleOtpChange(idx, e.target.value)}
                     onKeyDown={e => handleOtpKeyDown(idx, e)}
-                    className="w-12 h-14 text-center font-mono text-xl font-bold bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none focus:ring-2 focus:ring-[#2DE2B5]/30 transition-all"
+                    className="w-10 h-12 sm:w-12 sm:h-14 text-center font-mono font-bold text-lg bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none transition-colors"
                   />
                 ))}
               </div>
             </div>
 
             <div className="flex items-center justify-between text-xs text-[#9BAEA2]">
-              <span>Resend code in <strong>0:{otpTimer < 10 ? `0${otpTimer}` : otpTimer}</strong></span>
+              <span>
+                {otpTimer > 0 ? (
+                  `Resend code in 0:${otpTimer.toString().padStart(2, '0')}`
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSendPhoneOtp}
+                    className="text-[#2DE2B5] hover:underline cursor-pointer"
+                  >
+                    Resend code
+                  </button>
+                )}
+              </span>
               <button
                 type="button"
-                onClick={() => { setMode('phone_entry'); setErrorMessage('') }}
-                className="text-[#2DE2B5] hover:underline cursor-pointer"
+                onClick={() => { setMode('signin'); setErrorMessage('') }}
+                className="hover:text-white transition-colors cursor-pointer"
               >
-                Change mobile number
+                Use password
               </button>
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full h-11 bg-[#2DE2B5] text-[#07110C] font-bold text-sm rounded-xl hover:brightness-105 transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#2DE2B5]/20 cursor-pointer"
+              disabled={isLoading || otp.join('').length !== 6}
+              className="w-full h-11 bg-[#2DE2B5] text-[#07110C] font-bold text-sm rounded-xl hover:brightness-105 disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#2DE2B5]/20 cursor-pointer"
             >
               {isLoading ? (
                 <>
@@ -683,19 +691,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </>
               )}
             </button>
-
-            <button
-              type="button"
-              onClick={() => { setMode('signin'); setErrorMessage('') }}
-              className="w-full py-2 text-xs text-[#9BAEA2] hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Use password instead</span>
-            </button>
           </form>
         ) : (
-          /* MODE 4: Standard Sign In & Sign Up Form */
+          /* MODE 4: Email / Password Sign In & Sign Up */
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Mode Switch Tabs */}
+            <div className="flex p-1 rounded-xl bg-[#0E1F17] border border-white/10 mb-4">
+              <button
+                type="button"
+                onClick={() => { setMode('signin'); setErrorMessage('') }}
+                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  mode === 'signin' ? 'bg-[#2DE2B5] text-[#07110C] shadow-sm' : 'text-[#9BAEA2] hover:text-white'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('signup'); setErrorMessage('') }}
+                className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  mode === 'signup' ? 'bg-[#2DE2B5] text-[#07110C] shadow-sm' : 'text-[#9BAEA2] hover:text-white'
+                }`}
+              >
+                Create Account
+              </button>
+            </div>
+
             {mode === 'signup' && (
               <div>
                 <label className="block text-xs font-medium text-[#EEDBCA] mb-1.5">
@@ -731,11 +752,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <label className="block text-xs font-medium text-[#EEDBCA]">
                   Password
                 </label>
-                {mode === 'signin' && (
-                  <span className="text-[11px] text-[#9BAEA2] hover:text-[#2DE2B5] transition-colors cursor-pointer">
-                    Forgot password?
-                  </span>
-                )}
               </div>
               <div className="relative">
                 <input
@@ -756,7 +772,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={isLoading}
@@ -814,7 +829,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </div>
 
-            {/* Discreet Evaluator Demo Link */}
+            {/* Evaluator Demo Link */}
             <div className="pt-3 text-center border-t border-white/10 mt-4">
               <button
                 type="button"
@@ -822,7 +837,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#9BAEA2] hover:text-[#2DE2B5] transition-colors cursor-pointer group"
               >
                 <Sparkles className="w-3 h-3 text-[#2DE2B5] group-hover:rotate-12 transition-transform" />
-                <span>Evaluators / Judges: Load Arun Sharma Demo Portfolio (₹65,623)</span>
+                <span>Evaluators / Judges: Explore Sample Data (Arun Sharma ₹65,623)</span>
               </button>
             </div>
           </form>

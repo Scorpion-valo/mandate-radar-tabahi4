@@ -19,8 +19,23 @@ from fastapi.testclient import TestClient
 
 from main import app
 from detector import analyze_statement, parse_date_series, DateParseError, detect_obligation
+from app.services.auth_service import create_access_token
+from app.core.db import init_db, get_db
+from app.models.user import User
 
 client = TestClient(app)
+
+@pytest.fixture(scope="module")
+def auth_headers():
+    init_db()
+    session = next(get_db())
+    u = session.query(User).filter(User.id == "test_phase1_user").first()
+    if not u:
+        u = User(id="test_phase1_user", email="test_phase1@example.com", password_hash="hash", full_name="Phase1 User", is_active=True)
+        session.add(u)
+        session.commit()
+    token = create_access_token({"sub": "test_phase1_user", "email": "test_phase1@example.com"})
+    return {"Authorization": f"Bearer {token}"}
 
 def test_indian_date_parsing_success():
     """Verify Indian day-first date formats convert cleanly to ISO YYYY-MM-DD."""
@@ -36,7 +51,7 @@ def test_indian_date_parsing_success():
     parsed_mon = parse_date_series(dates_mon)
     assert parsed_mon.tolist() == ["2026-01-10", "2026-02-10", "2026-03-10"]
 
-def test_invalid_date_returns_422_with_row_number():
+def test_invalid_date_returns_422_with_row_number(auth_headers):
     """Verify an unparseable date returns HTTP 422 naming the exact CSV row number."""
     csv_content = (
         "Date,Descriptor,Amount\n"
@@ -46,13 +61,13 @@ def test_invalid_date_returns_422_with_row_number():
         "2026-04-15,NETFLIX,649.00\n"
     )
     files = {"file": ("statement.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-    res = client.post("/api/statement/upload", files=files)
+    res = client.post("/api/statement/upload", files=files, headers=auth_headers)
     assert res.status_code == 422
     data = res.json()
     assert "Invalid date format at row 4" in data["detail"]
     assert "NOT_A_DATE" in data["detail"]
 
-def test_amount_layout_credits_dropped_and_parse_report():
+def test_amount_layout_credits_dropped_and_parse_report(auth_headers):
     """
     Verify:
     1. Separate Debit & Credit columns drop salary/credit deposits.
@@ -69,7 +84,7 @@ def test_amount_layout_credits_dropped_and_parse_report():
         "20/03/2026,BLANK ROW,,\n"
     )
     files = {"file": ("statement.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-    res = client.post("/api/statement/upload", files=files)
+    res = client.post("/api/statement/upload", files=files, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
 
@@ -86,7 +101,7 @@ def test_amount_layout_credits_dropped_and_parse_report():
     assert not any("SALARY" in m for m in merchants)
     assert any("Netflix" in m for m in merchants)
 
-def test_signed_amounts_and_dr_cr_indicators():
+def test_signed_amounts_and_dr_cr_indicators(auth_headers):
     """Verify signed amount layouts treat positive as deposit/credit and drop it."""
     csv_content = (
         "Date,Particulars,Amount\n"
@@ -96,7 +111,7 @@ def test_signed_amounts_and_dr_cr_indicators():
         "2026-03-10,SPOTIFY INDIA,-119.00\n"
     )
     files = {"file": ("statement.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-    res = client.post("/api/statement/upload", files=files)
+    res = client.post("/api/statement/upload", files=files, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
 
@@ -106,7 +121,7 @@ def test_signed_amounts_and_dr_cr_indicators():
     assert len(mandates) == 1
     assert "Spotify" in mandates[0]["merchant_name"]
 
-def test_telemetry_realism_no_fake_zombie_flags_on_upload():
+def test_telemetry_realism_no_fake_zombie_flags_on_upload(auth_headers):
     """Verify uploaded statements without telemetry feed show usage_status='unknown' and zero fake zombie flags."""
     csv_content = (
         "Date,Particulars,Amount\n"
@@ -115,7 +130,7 @@ def test_telemetry_realism_no_fake_zombie_flags_on_upload():
         "2026-03-10,FITFAM GYM MEMBERSHIP,2500.00\n"
     )
     files = {"file": ("statement.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-    res = client.post("/api/statement/upload", files=files)
+    res = client.post("/api/statement/upload", files=files, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
 

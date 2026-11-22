@@ -6,6 +6,7 @@ import { MoneliqLandingPage } from './components/MoneliqLandingPage'
 import { AuthModal } from './components/AuthModal'
 import { DesignSystemShowcase } from './components/DesignSystemShowcase'
 import { SAMPLE_MANDATES, SAMPLE_HERO_METRICS } from './lib/sampleData'
+import { safeFetchJson } from './lib/api'
 import type { GraphNode, GraphEdge } from './components/GraphCanvas'
 import { CheckCircle2, Info } from 'lucide-react'
 
@@ -41,7 +42,7 @@ export default function App() {
     }
   }, [toastNotification])
 
-  // Handle 401 Unauthorized: clear state, return to opening stage, and open login without infinite loop
+  // Handle 401 Unauthorized / Token Expiration: clear state, return to opening stage, and open login without infinite loop
   useEffect(() => {
     const handleUnauthorized = () => {
       setCurrentUser({
@@ -61,7 +62,11 @@ export default function App() {
     }
 
     window.addEventListener('mandate_radar:unauthorized', handleUnauthorized)
-    return () => window.removeEventListener('mandate_radar:unauthorized', handleUnauthorized)
+    window.addEventListener('mandate_radar_auth_expired', handleUnauthorized)
+    return () => {
+      window.removeEventListener('mandate_radar:unauthorized', handleUnauthorized)
+      window.removeEventListener('mandate_radar_auth_expired', handleUnauthorized)
+    }
   }, [])
 
   // Current User Session (Persisted in localStorage, production-ready)
@@ -123,8 +128,8 @@ export default function App() {
     if (isDemoAccount(currentUser)) {
       fetchInitialData(currentUser)
     }
-    loadSampleGraph()
-  }, [])
+    loadSampleGraph(currentUser?.name && currentUser.name !== 'New User' ? currentUser.name : 'Rahul Sharma')
+  }, [currentUser?.name])
 
   const fetchInitialData = async (userToFetch = currentUser) => {
     if (!isDemoAccount(userToFetch)) {
@@ -139,7 +144,7 @@ export default function App() {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`
       }
-      const res = await fetch('/api/analyze', {
+      const { ok, data } = await safeFetchJson<any>('/api/analyze', {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -147,8 +152,7 @@ export default function App() {
           user_id: userToFetch.id
         })
       })
-      if (!res.ok) throw new Error('API offline')
-      const data = await res.json()
+      if (!ok || !data) throw new Error('API offline')
       if (data.mandates && data.mandates.length > 0) {
         setMandates(data.mandates)
         setHeroMetrics(data.hero_metrics || SAMPLE_HERO_METRICS)
@@ -196,9 +200,9 @@ export default function App() {
     setToastNotification('Demo portfolio loaded (10 mandates, ₹65,623/year)')
   }
 
-  const loadSampleGraph = () => {
+  const loadSampleGraph = (userName = (currentUser?.name && currentUser.name !== 'New User' ? currentUser.name : 'Rahul Sharma')) => {
     const sampleNodes: GraphNode[] = [
-      { id: 'usr-1', label: 'User', type: 'user', properties: { name: 'Rahul Sharma' } },
+      { id: 'usr-1', label: 'Account Holder', name: userName, type: 'person', properties: { name: userName } },
       { id: 'p-alpha', label: 'Alphabet Inc', type: 'parent', properties: { name: 'Alphabet Inc', country: 'US' } },
       { id: 'p-amz', label: 'Amazon.com Inc', type: 'parent', properties: { name: 'Amazon.com Inc', country: 'US' } },
       { id: 'p-dis', label: 'Disney', type: 'parent', properties: { name: 'The Walt Disney Co', country: 'US' } },

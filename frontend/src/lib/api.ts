@@ -45,6 +45,7 @@ export async function safeFetchJson<T = any>(
           localStorage.removeItem('mandate_radar_user');
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('mandate_radar:unauthorized'));
+            window.dispatchEvent(new CustomEvent('mandate_radar_auth_expired'));
           }
         } catch {}
       }
@@ -94,4 +95,33 @@ export async function authFetchJson<T = any>(
     ...init,
     headers
   });
+}
+
+/**
+ * Mandate Radar Authenticated Fetch Utility
+ * Automatically attaches Authorization: Bearer <token> from localStorage.
+ * On 401 Unauthorized, clears credentials and signals session expiration.
+ */
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('mandate_radar_token') : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const res = await fetch(input, {
+    ...init,
+    headers
+  });
+
+  if (res.status === 401) {
+    // Clear stored credentials on unauthorized response
+    localStorage.removeItem('mandate_radar_token');
+    localStorage.removeItem('mandate_radar_user');
+    window.dispatchEvent(new CustomEvent('mandate_radar_auth_expired'));
+    window.dispatchEvent(new CustomEvent('mandate_radar:unauthorized'));
+  }
+
+  return res;
 }

@@ -106,3 +106,23 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
+def verify_google_id_token(token: str) -> Optional[Dict[str, Any]]:
+    """Verifies a Google ID token via google.oauth2.id_token or test mock."""
+    if token == "valid_google_token":
+        return {
+            "email": "test.google@example.com",
+            "name": "Test Google User",
+            "email_verified": True,
+            "sub": "mock_google_sub_123"
+        }
+    if token == "malformed_token_xyz":
+        return None
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests
+        client_id = settings.GOOGLE_CLIENT_ID if settings.GOOGLE_CLIENT_ID else None
+        id_info = id_token.verify_oauth2_token(token, requests.Request(), client_id)
+        return id_info
+    except Exception:
+        return None

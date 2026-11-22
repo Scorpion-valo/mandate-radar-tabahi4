@@ -109,10 +109,14 @@ def detect_obligation(descriptor: str, merchant_id: Optional[str] = None) -> Opt
     return None
 
 def clean_descriptor(descriptor: str) -> str:
-    """Cleans punctuation, ref IDs, and trailing whitespace for fallback grouping."""
+    """Cleans punctuation, ref IDs, rail prefixes, and corporate suffixes for clean grouping."""
     text = str(descriptor).upper()
     text = re.sub(r"[#*\/\\\-_:]", " ", text)
     text = re.sub(r"\b\d{4,}\b", "", text) # Remove long transaction or reference numbers
+    # Strip common payment prefixes
+    text = re.sub(r"^(UPI\s+AUTOPAY|UPI|AUTOPAY|NACH|ACH|ECS|EMANDATE|CARD\s+SI|CARD|POS)\s+", "", text)
+    # Strip common corporate legal entity and descriptor suffixes
+    text = re.sub(r"\s+(PVT\s+LTD|PRIVATE\s+LIMITED|LTD|LIMITED|INC|CORP|CORPORATION|LLC|LLP|ANNUAL|MONTHLY|WEEKLY|SUBSCRIPTION|PLAN|PREMIUM|BILL|AUTOPAY|NACH)$", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -139,7 +143,9 @@ def generate_charge_hash(user_id: str, account_label: str, date: str, amount: fl
 
 def compute_expected_next_charge_date(last_charged_dt: pd.Timestamp, cadence: str) -> str:
     """Calculates the expected next debit date based on detected interval."""
-    if cadence == "MONTHLY":
+    if cadence == "WEEKLY":
+        next_dt = last_charged_dt + pd.Timedelta(days=7)
+    elif cadence == "MONTHLY":
         next_dt = last_charged_dt + pd.Timedelta(days=30)
     elif cadence == "QUARTERLY":
         next_dt = last_charged_dt + pd.Timedelta(days=91)
@@ -154,26 +160,36 @@ def resolve_merchant_from_descriptor(descriptor: str):
     Deterministically matches raw descriptor against verified reference graph regexes.
     NEVER guesses or hallucinates. Returns None if unrecognised.
     """
+    desc_str = str(descriptor).strip()
     for m in REFERENCE_MERCHANTS:
         for pattern in m.get("descriptors", []):
-            if re.search(pattern, str(descriptor), re.IGNORECASE):
+            if re.search(pattern, desc_str, re.IGNORECASE):
                 return m
     return None
 
-def detect_payment_mechanism(descriptor: str, ref_str: str = ""):
+def detect_payment_mechanism(descriptor: str, ref_str: str = "", channel: str = ""):
     """
-    Detects the rail (UPI AutoPay, Card SI, Bank NACH, Play Store, App Store, Direct).
+    Detects the rail (UPI AutoPay, Card SI, Bank NACH, Play Store, App Store, Direct)
+    from explicit channel column or transaction narration.
     """
+    ch = str(channel).upper() if channel else ""
+    if "NACH" in ch or "ECS" in ch or "ACH" in ch or "EMANDATE" in ch:
+        return "BANK_NACH"
+    if "UPI" in ch:
+        return "UPI_AUTOPAY"
+    if "CARD" in ch:
+        return "CARD_SI"
+
     combined = f"{descriptor} {ref_str}".upper()
     if "UPI" in combined or "AUTOPAY" in combined or "VPA" in combined:
         return "UPI_AUTOPAY"
-    if "NACH" in combined or "ACH D" in combined or "ECS" in combined:
+    if "NACH" in combined or "ACH D" in combined or "ECS" in combined or "EMANDATE" in combined:
         return "BANK_NACH"
     if "G.CO/HELPPAY" in combined or "PLAY PASS" in combined or "GOOGLE*PLAY" in combined:
         return "PLAY_STORE"
     if "APPLE.COM/BILL" in combined or "ITUNES" in combined:
         return "APP_STORE"
-    if "CARD-SI" in combined or "POS DEBIT" in combined or "MSBILL.INFO" in combined or "STRIPE" in combined:
+    if "CARD" in combined or "CARD-SI" in combined or "POS DEBIT" in combined or "MSBILL.INFO" in combined or "STRIPE" in combined:
         return "CARD_SI"
     return "DIRECT_MERCHANT"
 
@@ -232,6 +248,13 @@ def analyze_statement(
 
     # 1. First Pass: Resolve against reference graph or fallback to cleaned key
     def get_group_key(row):
+        m_col = str(row.get("merchant", "")).strip() if "merchant" in row else ""
+        if m_col and m_col.lower() not in ("nan", "none", "null", "undefined", ""):
+            resolved = resolve_merchant_from_descriptor(m_col)
+            if resolved:
+                return f"REF::{resolved['id']}"
+            return f"MERCHANT::{clean_descriptor(m_col)}"
+
         resolved = resolve_merchant_from_descriptor(row["raw_descriptor"])
         if resolved:
             return f"REF::{resolved['id']}"
@@ -251,6 +274,9 @@ def analyze_statement(
 
         # Check for hard negative pattern matches first
         sample_desc = sorted_group["raw_descriptor"].iloc[0]
+        cleaned_sample = clean_descriptor(sample_desc).strip()
+        if not cleaned_sample or cleaned_sample.lower() in ("nan", "none", "null", "undefined"):
+            continue
         hard_negative_match = None
         for hn in HARD_NEGATIVE_PATTERNS:
             for p in hn["descriptors"]:
@@ -260,23 +286,31 @@ def analyze_statement(
             if hard_negative_match:
                 break
 
-        # A recurring mandate requires at least 1 annual or >= 2 monthly/quarterly occurrences
+        # A recurring mandate requires at least 1 annual/subscription occurrence or >= 2 occurrences
         if count == 1:
-            # Check if this single charge matches a known annual subscription in reference
+            # Check if this single charge matches a known subscription in reference
             resolved_ref = resolve_merchant_from_descriptor(sample_desc)
-            cadences = resolved_ref.get("supported_cadences", []) if resolved_ref else []
-            amount = float(sorted_group["amount_num"].iloc[0])
-            is_annual_amount = amount >= 500.0 or cadences == ["ANNUAL"]
-            if resolved_ref and "ANNUAL" in cadences and is_annual_amount:
-                # Annual mandate registered
+            if resolved_ref and any(c in resolved_ref.get("supported_cadences", []) for c in ["ANNUAL", "MONTHLY"]):
                 amount = float(sorted_group["amount_num"].iloc[0])
-                first_date_dt = sorted_group["date_dt"].iloc[0]
-                expected_next = compute_expected_next_charge_date(first_date_dt, "ANNUAL")
-                cadence = "ANNUAL"
+                if "MONTHLY" in resolved_ref.get("supported_cadences", []) and (amount <= 500 or resolved_ref.get("default_amount") == amount):
+                    eff_cadence = "MONTHLY"
+                    annual_committed = round(amount * 12.0, 2)
+                elif "ANNUAL" in resolved_ref.get("supported_cadences", []):
+                    eff_cadence = "ANNUAL"
+                    annual_committed = amount
+                else:
+                    eff_cadence = "MONTHLY"
+                    annual_committed = round(amount * 12.0, 2)
 
-                # Check lapsed status (> 1.5 * 365 = 548 days)
+                channel_val = sorted_group["channel"].iloc[0] if "channel" in sorted_group.columns else ""
+                mechanism = detect_payment_mechanism(sample_desc, sorted_group["ref_str"].iloc[0], channel_val)
+                mech_details = PAYMENT_MECHANISMS.get(mechanism, PAYMENT_MECHANISMS["DIRECT_MERCHANT"])
+                first_date_dt = sorted_group["date_dt"].iloc[0]
+                expected_next = compute_expected_next_charge_date(first_date_dt, eff_cadence)
+
                 days_since_last = (statement_end_date - first_date_dt).days
-                is_lapsed = days_since_last > 548
+                cycle_days = 365 if eff_cadence == "ANNUAL" else 30
+                is_lapsed = days_since_last > int(1.5 * cycle_days)
 
                 obligation_type = detect_obligation(sample_desc, resolved_ref["id"])
                 is_obligation = obligation_type is not None
@@ -284,24 +318,19 @@ def analyze_statement(
                 if is_lapsed:
                     status = "lapsed"
                     flag = "LAPSED"
-                    flag_reason = f"Lapsed annual mandate: Last debit occurred {days_since_last} days ago (>1.5 cycles). Vendor appears inactive."
+                    flag_reason = f"Lapsed {eff_cadence.lower()} mandate: Last debit occurred {days_since_last} days ago (>1.5 cycles). Vendor appears inactive."
                     annual_committed = 0.0
                     savings_if_cancelled = 0.0
                 elif is_obligation:
                     status = "active"
                     flag = "OBLIGATION"
                     flag_reason = f"Committed non-discretionary obligation ({obligation_type.capitalize()})."
-                    annual_committed = amount
                     savings_if_cancelled = 0.0
                 else:
                     status = "active"
                     flag = "HEALTHY"
-                    flag_reason = "Verified active annual contract."
-                    annual_committed = amount
+                    flag_reason = f"Verified active {eff_cadence.lower()} contract."
                     savings_if_cancelled = annual_committed
-
-                mechanism = detect_payment_mechanism(sample_desc, sorted_group["ref_str"].iloc[0])
-                mech_details = PAYMENT_MECHANISMS.get(mechanism, PAYMENT_MECHANISMS["DIRECT_MERCHANT"])
 
                 acc_slug = re.sub(r'[^a-zA-Z0-9]', '_', str(account_label).lower()).strip('_')[:12] or "acc"
                 merch_slug = resolved_ref['id'].strip('_')
@@ -331,7 +360,7 @@ def analyze_statement(
                     "obligation_type": obligation_type,
                     "status": status,
                     "usage_status": "unknown",
-                    "cadence": "ANNUAL",
+                    "cadence": eff_cadence,
                     "billing_type": "fixed",
                     "latest_amount": amount,
                     "initial_amount": amount,
@@ -361,47 +390,60 @@ def analyze_statement(
                 })
                 continue
 
-        # Multiple transactions: Analyze time gaps and amounts
+        # Multiple transactions: Analyze time gaps across distinct cycle dates
         date_series = sorted_group["date_dt"]
-        gaps_days = (date_series - date_series.shift(1)).dt.days.dropna().tolist()
         amounts = sorted_group["amount_num"].tolist()
 
-        median_gap = float(np.median(gaps_days)) if gaps_days else 0.0
+        # Check monthly span across calendar periods
+        calendar_months = sorted(date_series.dt.to_period("M").unique())
+        month_span = len(calendar_months)
 
-        # Hard negative check: Weekly interval (< 14 days)
-        if median_gap < 14:
-            rejected.append({
-                "descriptor": sample_desc,
-                "reason": "Charges occur in rapid non-subscription frequency (<14 days median gap, e.g. weekly orders).",
-                "count": count,
-                "median_gap_days": median_gap,
-                "amounts": amounts[:5]
-            })
-            continue
+        unique_dates = sorted(date_series.drop_duplicates().tolist())
+        if len(unique_dates) >= 2:
+            date_diffs = pd.Series(unique_dates).diff().dt.days.dropna().tolist()
+            median_gap = float(np.median(date_diffs)) if date_diffs else 0.0
+        else:
+            median_gap = 0.0
 
-        # Infer cadence with tolerance bands
+        # Infer cadence with tolerance bands (supports Weekly, Monthly, Quarterly, Annual)
         cadence = None
-        if 24 <= median_gap <= 36: # Monthly ±5 days
+        if 5 <= median_gap <= 11: # Weekly ±3 days
+            cadence = "WEEKLY"
+            annual_multiplier = 52.0
+        elif 20 <= median_gap <= 40: # Monthly ±10 days
             cadence = "MONTHLY"
             annual_multiplier = 12.0
-        elif 80 <= median_gap <= 100: # Quarterly ±10 days
+        elif 75 <= median_gap <= 115: # Quarterly ±20 days
             cadence = "QUARTERLY"
             annual_multiplier = 4.0
-        elif 350 <= median_gap <= 380: # Annual ±15 days
+        elif 335 <= median_gap <= 395: # Annual ±30 days
             cadence = "ANNUAL"
             annual_multiplier = 1.0
-        else:
+        elif month_span >= 2: # Charges recur across multiple calendar months (e.g. multi-channel duplicates)
+            month_diffs = pd.Series([m.to_timestamp() for m in calendar_months]).diff().dt.days.dropna().tolist()
+            month_median_gap = float(np.median(month_diffs)) if month_diffs else 30.0
+            if 25 <= month_median_gap <= 35:
+                cadence = "MONTHLY"
+                annual_multiplier = 12.0
+
+        if not cadence:
             rejected.append({
                 "descriptor": sample_desc,
-                "reason": f"Irregular interval (median gap: {median_gap:.1f} days) does not align with monthly, quarterly or annual cadence.",
+                "reason": f"Irregular interval (median gap: {median_gap:.1f} days, month span: {month_span}) does not align with weekly, monthly, quarterly or annual cadence.",
                 "count": count,
                 "median_gap_days": median_gap,
                 "amounts": amounts[:5]
             })
             continue
 
-        latest_amount = float(amounts[-1])
-        initial_amount = float(amounts[0])
+        # If multiple duplicate debits occur per cycle (e.g. multi-channel CloudStore)
+        charges_per_cycle = round(count / max(month_span, 1))
+        if charges_per_cycle > 1 and cadence == "MONTHLY":
+            latest_amount = float(sorted_group.groupby(sorted_group["date_dt"].dt.to_period("M"))["amount_num"].sum().iloc[-1])
+            initial_amount = float(sorted_group.groupby(sorted_group["date_dt"].dt.to_period("M"))["amount_num"].sum().iloc[0])
+        else:
+            latest_amount = float(amounts[-1])
+            initial_amount = float(amounts[0])
         last_charged_dt = sorted_group["date_dt"].iloc[-1]
         expected_next = compute_expected_next_charge_date(last_charged_dt, cadence)
 
@@ -514,11 +556,25 @@ def analyze_statement(
             annual_committed = round(latest_amount * annual_multiplier, 2)
             savings_if_cancelled = annual_committed
 
-        mechanism = detect_payment_mechanism(sample_desc, sorted_group["ref_str"].iloc[-1])
+        channel_val = sorted_group["channel"].iloc[-1] if "channel" in sorted_group.columns else ""
+        mechanism = detect_payment_mechanism(sample_desc, sorted_group["ref_str"].iloc[-1], channel_val)
         mech_details = PAYMENT_MECHANISMS.get(mechanism, PAYMENT_MECHANISMS["DIRECT_MERCHANT"])
 
+        # Check cross-channel redundancy (e.g. multi-rail mandates for single service)
+        channels_used = [str(c) for c in sorted_group["channel"].dropna().unique().tolist()] if "channel" in sorted_group.columns else []
+        if len(channels_used) > 1 and flag == "HEALTHY":
+            flag = "PRICE_HIKE"
+            flag_reason = f"Redundant multi-rail mandates detected: Debited across {len(channels_used)} channels ({', '.join(channels_used)})."
+
+        accs_used = [str(a) for a in sorted_group["account_id"].dropna().unique().tolist()] if "account_id" in sorted_group.columns else []
+        eff_account_label = ", ".join(accs_used) if accs_used else account_label
+
         is_recognized = merchant_info is not None
-        merchant_name = merchant_info["name"] if is_recognized else f"Unrecognised: {clean_descriptor(sample_desc)}"
+        if is_recognized:
+            merchant_name = merchant_info["name"]
+        else:
+            fallback_name = cleaned_sample.title() if cleaned_sample else clean_descriptor(sample_desc)
+            merchant_name = f"Unrecognised: {fallback_name}"
         category = f"Obligation: {obligation_type.capitalize()}" if is_obligation else (merchant_info["category"] if is_recognized else "Uncategorized Subscription")
         parent_id = merchant_info.get("parent_id") if is_recognized else None
         parent_name = merchant_info.get("parent") if is_recognized else "Independent / Unmapped"
@@ -536,7 +592,7 @@ def analyze_statement(
                 "date": str(row["date"]),
                 "amount": float(row["amount_num"]),
                 "descriptor": row["raw_descriptor"],
-                "account_label": account_label
+                "account_label": eff_account_label
             })
 
         mandates.append({
@@ -561,7 +617,7 @@ def analyze_statement(
             "first_seen": sorted_group["date"].iloc[0],
             "last_charged": sorted_group["date"].iloc[-1],
             "expected_next_charge_date": expected_next,
-            "account_label": account_label,
+            "account_label": eff_account_label,
             "mechanism": mechanism,
             "mechanism_name": mech_details["name"],
             "flag": flag,

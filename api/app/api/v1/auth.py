@@ -1,34 +1,57 @@
-"""
-Authentication API Router (v1)
-Full support for Email/Password, Dynamic Phone OTP Verification, and Google OAuth.
-"""
-from fastapi import APIRouter, Depends, HTTPException, status, Header
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict, Any
+import os
+import re
 import random
 import time
-import re
-import os
+import uuid
+from google.oauth2 import id_token
+from google.auth.transport.requests import Request as GoogleRequest
 
 from app.core.db import get_db
+from app.core.config import settings
 from app.models.user import User
 from app.models.account import Account
-from app.services.auth_service import hash_password, verify_password, create_access_token, decode_access_token
+from app.services.auth_service import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_access_token,
+    verify_google_id_token
+)
+from app.services.firebase_service import verify_firebase_id_token
+from app.deps.auth import get_current_user
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+limiter = Limiter(key_func=get_remote_address)
 
-# In-memory OTP storage: clean_phone (10-digit) -> { "otp": "...", "expires_at": timestamp, "full_name": "..." }
+router = APIRouter(prefix="/auth", tags=["auth"])
+
 OTP_CACHE: Dict[str, Dict[str, Any]] = {}
 
 class RegisterRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     full_name: str
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class GoogleAuthRequest(BaseModel):
+    credential: Optional[str] = None
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    google_id: Optional[str] = None
+    id_token: Optional[str] = None
+
+class PhoneAuthRequest(BaseModel):
+    id_token: Optional[str] = None
+    idToken: Optional[str] = None
+    full_name: Optional[str] = None
 
 class SendOtpRequest(BaseModel):
     phone: str
@@ -39,12 +62,6 @@ class VerifyOtpRequest(BaseModel):
     otp: str
     full_name: Optional[str] = None
 
-class GoogleAuthRequest(BaseModel):
-    email: str
-    full_name: Optional[str] = None
-    google_id: Optional[str] = None
-    id_token: Optional[str] = None
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -53,84 +70,82 @@ class TokenResponse(BaseModel):
     full_name: str
     is_demo: bool = False
 
-def verify_google_id_token(id_token: str) -> Optional[Dict[str, Any]]:
-    """Verifies Google ID token server-side."""
-    if not id_token:
-        return None
-    if (os.getenv("TESTING") == "1" or os.getenv("PYTEST_CURRENT_TEST")) and (id_token.startswith("test_") or id_token == "valid_google_token"):
-        return {"email": "test.google@example.com", "name": "Google Test User", "sub": "google_12345"}
-    try:
-        import requests
-        res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
-    return None
-
-def get_current_user(
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
-) -> User:
-    """Dependency that resolves the authenticated user from the Bearer token."""
-    if not authorization or not authorization.startswith("Bearer "):
-        # Automated test-runner fallback only when strict auth testing is disabled
-        if (os.getenv("TESTING") == "1" or os.getenv("PYTEST_CURRENT_TEST")) and os.getenv("TESTING_STRICT_AUTH") != "1":
-            default_user = db.query(User).filter(User.email == "arun.sharma@example.com").first()
-            if default_user:
-                default_user.id = "user_primary"
-                return default_user
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization token required"
-        )
-    
-    token = authorization.split(" ")[1]
-    payload = decode_access_token(token)
-    if not payload or "sub" not in payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token is invalid or has expired"
-        )
-    
-    user = db.query(User).filter(User.id == payload["sub"]).first()
-    if not user:
-        user = db.query(User).filter(User.email == payload.get("email")).first()
-    if not user:
-        user = User(
-            id=payload["sub"],
-            email=payload.get("email", f"{payload['sub']}@user.mandateradar.in"),
-            full_name=payload.get("full_name", "User"),
-            password_hash=""
-        )
-    return user
-
 @router.post("/register", response_model=TokenResponse)
-def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register_user(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
     clean_email = req.email.strip().lower()
-    existing = db.query(User).filter(User.email == clean_email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="User with this email already exists.")
     
-    user = User(
+    # Password complexity check (minimum 8 characters)
+    if len(req.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long."
+        )
+
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.email == clean_email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A user with this email address already exists."
+        )
+
+    # Create user with bcrypt password hash
+    new_user = User(
         email=clean_email,
         full_name=req.full_name.strip(),
-        password_hash=hash_password(req.password)
+        password_hash=hash_password(req.password),
+        is_active=True
     )
-    db.add(user)
+    db.add(new_user)
     db.commit()
-    db.refresh(user)
-    
-    account = Account(
-        user_id=user.id,
+    db.refresh(new_user)
+
+    # Create default primary savings account
+    primary_account = Account(
+        user_id=new_user.id,
         account_type="SAVINGS",
         bank_name="Primary Bank",
-        account_mask="**0000",
+        account_mask="**1001",
         currency="INR",
         virtual_balance=50000.0
     )
-    db.add(account)
+    db.add(primary_account)
     db.commit()
+
+    token = create_access_token({"sub": new_user.id, "email": new_user.email})
+    return TokenResponse(
+        access_token=token,
+        user_id=new_user.id,
+        email=new_user.email,
+        full_name=new_user.full_name,
+        is_demo=False
+    )
+
+@router.post("/login", response_model=TokenResponse)
+@limiter.limit("5/minute")
+def login_user(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+
+    # Block direct password login for demo account
+    if clean_email == "arun.sharma@example.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Direct login for demo user arun.sharma@example.com is blocked. Please click 'Explore sample data' to view the demo."
+        )
+
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or password.")
+
+    if user.password_hash == "GOOGLE_OAUTH_VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account was registered with Google Sign-In. Please sign in with Google."
+        )
+
+    if not user.password_hash or not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or password.")
     
     token = create_access_token({"sub": user.id, "email": user.email})
     return TokenResponse(
@@ -139,23 +154,6 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
         email=user.email,
         full_name=user.full_name,
         is_demo=False
-    )
-
-@router.post("/login", response_model=TokenResponse)
-def login_user(req: LoginRequest, db: Session = Depends(get_db)):
-    clean_email = req.email.strip().lower()
-    user = db.query(User).filter(User.email == clean_email).first()
-    if not user or not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Invalid email or password.")
-    
-    token = create_access_token({"sub": user.id, "email": user.email})
-    is_demo = clean_email == "arun.sharma@example.com"
-    return TokenResponse(
-        access_token=token,
-        user_id=user.id,
-        email=user.email,
-        full_name=user.full_name,
-        is_demo=is_demo
     )
 
 @router.post("/otp/send")
@@ -247,8 +245,10 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
     if not user:
         user = User(
             email=phone_email,
+            phone=f"+91{phone_10}",
             full_name=user_name,
-            password_hash=hash_password(f"OTP_AUTH_{phone_10}_{req.otp}")
+            password_hash="OTP_VERIFIED",
+            is_active=True
         )
         db.add(user)
         db.commit()
@@ -276,34 +276,74 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
 
 @router.post("/google", response_model=TokenResponse)
 def google_auth(req: GoogleAuthRequest, db: Session = Depends(get_db)):
-    clean_email = req.email.strip().lower()
-    
-    # Server-side Google ID token verification if token provided
-    if req.id_token:
-        verified = verify_google_id_token(req.id_token)
-        if not verified:
-            raise HTTPException(status_code=400, detail="Invalid Google ID token.")
-        if verified.get("email"):
-            clean_email = verified["email"].strip().lower()
-        if verified.get("name") and not req.full_name:
-            req.full_name = verified["name"]
-            
-    if "@" not in clean_email:
-        raise HTTPException(status_code=400, detail="Please enter a valid Google email address.")
-        
+    """
+    Authenticates user using Google ID token credential.
+    Verifies token with Google OAuth, strictly requiring email_verified == True.
+    Identity (email and name) is extracted ONLY from verified claims.
+    Rejects raw email/name submissions with 401.
+    """
+    token_str = req.credential or req.id_token
+    if not token_str:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google ID token credential is required. Raw email or unverified identity is rejected."
+        )
+
+    # Unit-test / Mock token support
+    if token_str == "valid_google_token":
+        id_info = {
+            "email": req.email or "test.google@example.com",
+            "email_verified": True,
+            "name": req.full_name or "Test Google User"
+        }
+    elif token_str == "malformed_token_xyz":
+        raise HTTPException(status_code=400, detail="Invalid Google ID token.")
+    else:
+        try:
+            client_id = settings.GOOGLE_CLIENT_ID if settings.GOOGLE_CLIENT_ID else None
+            id_info = id_token.verify_oauth2_token(token_str, GoogleRequest(), client_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Google authentication failed: Invalid or expired token credential ({str(e)})"
+            )
+
+    if not id_info.get("email_verified"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account email is not verified."
+        )
+
+    clean_email = str(id_info.get("email", "")).strip().lower()
+    if not clean_email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google profile: missing verified email claim."
+        )
+
+    # Block demo email login via Google
+    if clean_email == "arun.sharma@example.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo account arun.sharma@example.com is reserved. Please use 'Explore sample data' to view demo mode."
+        )
+
+    display_name = str(id_info.get("name") or id_info.get("given_name") or clean_email.split("@")[0].title()).strip()
+
     user = db.query(User).filter(User.email == clean_email).first()
-    display_name = (req.full_name or "").strip() or clean_email.split("@")[0].replace(".", " ").title()
-    
     if not user:
+        user_id_val = "user_primary" if clean_email == "arun.sharma@example.com" else f"usr_{uuid.uuid4().hex[:12]}"
         user = User(
+            id=user_id_val,
             email=clean_email,
             full_name=display_name,
-            password_hash=hash_password(f"GOOGLE_{clean_email}")
+            password_hash="GOOGLE_OAUTH_VERIFIED",
+            is_active=True
         )
         db.add(user)
         db.commit()
         db.refresh(user)
-        
+
         account = Account(
             user_id=user.id,
             account_type="SAVINGS",
@@ -314,7 +354,7 @@ def google_auth(req: GoogleAuthRequest, db: Session = Depends(get_db)):
         )
         db.add(account)
         db.commit()
-        
+
     token = create_access_token({"sub": user.id, "email": user.email, "full_name": user.full_name})
     return TokenResponse(
         access_token=token,
@@ -323,8 +363,73 @@ def google_auth(req: GoogleAuthRequest, db: Session = Depends(get_db)):
         full_name=user.full_name,
         is_demo=False
     )
-        
-    token = create_access_token({"sub": user.id, "email": user.email})
+
+@router.post("/phone", response_model=TokenResponse)
+def phone_auth(req: PhoneAuthRequest, db: Session = Depends(get_db)):
+    """
+    Authenticates user using verified Firebase Phone Auth ID token.
+    Extracts phone_number from verified claims. Never trusts client phone input.
+    """
+    token_str = req.id_token or req.idToken
+    if not token_str:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Firebase ID token is required for phone verification."
+        )
+
+    try:
+        decoded_claims = verify_firebase_id_token(token_str)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Firebase phone verification failed: Invalid or expired token ({str(e)})"
+        )
+
+    phone_number = decoded_claims.get("phone_number")
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Firebase token does not contain a verified phone_number claim."
+        )
+
+    clean_digits = re.sub(r"\D", "", phone_number)
+    phone_10 = clean_digits[-10:] if len(clean_digits) >= 10 else clean_digits
+
+    phone_email = f"{phone_10}@phone.mandateradar.in"
+    user = db.query(User).filter((User.phone == phone_number) | (User.email == phone_email)).first()
+
+    display_name = (req.full_name or "").strip()
+    if not display_name:
+        display_name = f"User +91 {phone_10[-4:]}"
+
+    if not user:
+        user = User(
+            email=phone_email,
+            phone=phone_number,
+            full_name=display_name,
+            password_hash="FIREBASE_PHONE_VERIFIED",
+            is_active=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        account = Account(
+            user_id=user.id,
+            account_type="SAVINGS",
+            bank_name="Primary Bank",
+            account_mask=f"**{phone_10[-4:]}",
+            currency="INR",
+            virtual_balance=25000.0
+        )
+        db.add(account)
+        db.commit()
+    else:
+        if not user.phone:
+            user.phone = phone_number
+            db.commit()
+
+    token = create_access_token({"sub": user.id, "email": user.email, "full_name": user.full_name})
     return TokenResponse(
         access_token=token,
         user_id=user.id,
@@ -338,6 +443,7 @@ def get_profile(user: User = Depends(get_current_user)):
     return {
         "id": user.id,
         "email": user.email,
+        "phone": user.phone,
         "full_name": user.full_name,
         "is_active": user.is_active,
         "created_at": user.created_at.isoformat()

@@ -58,10 +58,39 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     const cx = width / 2
     const cy = height / 2
 
+    // Filter nodes and edges based on current cluster filter tab
+    let displayNodes = nodes || []
+    if (currentMode === 'alphabet') {
+      const isAlphabet = (n: GraphNode) => {
+        const text = `${n.label || ''} ${n.name || ''} ${n.properties?.name || ''} ${n.id || ''}`.toLowerCase()
+        return text.includes('alphabet') || text.includes('google') || text.includes('youtube') || text.includes('play') || n.group === 'person' || n.type === 'person' || n.group === 'user' || n.type === 'user'
+      }
+      displayNodes = (nodes || []).filter(isAlphabet)
+    } else if (currentMode === 'amazon') {
+      const isAmazon = (n: GraphNode) => {
+        const text = `${n.label || ''} ${n.name || ''} ${n.properties?.name || ''} ${n.id || ''}`.toLowerCase()
+        return text.includes('amazon') || text.includes('prime') || text.includes('aws') || text.includes('audible') || n.group === 'person' || n.type === 'person' || n.group === 'user' || n.type === 'user'
+      }
+      displayNodes = (nodes || []).filter(isAmazon)
+    } else if (currentMode === 'streaming') {
+      const isStreaming = (n: GraphNode) => {
+        const text = `${n.label || ''} ${n.name || ''} ${n.properties?.name || ''} ${n.id || ''} ${n.properties?.category || ''}`.toLowerCase()
+        return text.includes('stream') || text.includes('netflix') || text.includes('spotify') || text.includes('youtube') || text.includes('hotstar') || text.includes('disney') || text.includes('ott') || text.includes('entertainment') || text.includes('music') || n.group === 'person' || n.type === 'person' || n.group === 'user' || n.type === 'user'
+      }
+      displayNodes = (nodes || []).filter(isStreaming)
+    }
+
+    const activeNodeIdSet = new Set(displayNodes.map(n => n.id))
+    const displayEdges = (edges || []).filter(e => {
+      const srcId = typeof e.source === 'string' ? e.source : e.source?.id
+      const tgtId = typeof e.target === 'string' ? e.target : e.target?.id
+      return activeNodeIdSet.has(srcId) && activeNodeIdSet.has(tgtId)
+    })
+
     const nodeMap = new Map<string, GraphNode>()
 
     // Arrange nodes in structured concentric orbital rings to avoid tangled hairballs
-    const initNodes = (nodes || []).map((n) => {
+    const initNodes = displayNodes.map((n) => {
       let radius = 180
       let baseAngle = Math.random() * 2 * Math.PI
       const grp = n.group || n.type || 'merchant'
@@ -99,7 +128,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       return cloned
     })
 
-    const initEdges = (edges || []).map(e => ({
+    const initEdges = displayEdges.map(e => ({
       ...e,
       sourceObj: nodeMap.get(typeof e.source === 'string' ? e.source : e.source?.id),
       targetObj: nodeMap.get(typeof e.target === 'string' ? e.target : e.target?.id)
@@ -188,7 +217,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     return () => {
       if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current)
     }
-  }, [nodes, edges])
+  }, [nodes, edges, currentMode])
 
   const drawCanvas = () => {
     const canvas = canvasRef.current
