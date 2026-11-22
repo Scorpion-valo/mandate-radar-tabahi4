@@ -179,7 +179,13 @@ def resolve_bank_columns(
     if not debit_col:
         for k in ["withdrawal amt", "withdrawal amount", "debit amount", "debit", "withdrawal", "withdrawals", "dr"]:
             for norm_k, raw_col in norm_map.items():
-                if k in norm_k:
+                if raw_col in (desc_col, date_col):
+                    continue
+                if k == "dr":
+                    if re.search(r"\bdr\b", norm_k):
+                        debit_col = raw_col
+                        break
+                elif k in norm_k:
                     debit_col = raw_col
                     break
             if debit_col:
@@ -188,6 +194,8 @@ def resolve_bank_columns(
     if not debit_col:
         for k in ["amount", "txn amount", "amount (inr)", "transaction amount"]:
             for norm_k, raw_col in norm_map.items():
+                if raw_col in (desc_col, date_col):
+                    continue
                 if k in norm_k:
                     debit_col = raw_col
                     break
@@ -197,7 +205,13 @@ def resolve_bank_columns(
     if not credit_col:
         for k in ["deposit amt", "deposit amount", "credit amount", "credit", "deposit", "cr"]:
             for norm_k, raw_col in norm_map.items():
-                if k in norm_k:
+                if raw_col in (desc_col, date_col, debit_col):
+                    continue
+                if k == "cr":
+                    if re.search(r"\bcr\b", norm_k):
+                        credit_col = raw_col
+                        break
+                elif k in norm_k:
                     credit_col = raw_col
                     break
             if credit_col:
@@ -206,6 +220,8 @@ def resolve_bank_columns(
     if not ref_col:
         for k in ["chq", "ref", "utr", "cheque", "txn id", "id"]:
             for norm_k, raw_col in norm_map.items():
+                if raw_col in (desc_col, date_col, debit_col, credit_col):
+                    continue
                 if k in norm_k:
                     ref_col = raw_col
                     break

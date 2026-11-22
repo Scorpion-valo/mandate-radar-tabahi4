@@ -214,25 +214,27 @@ def test_explainability_fields(auth_headers):
 
 def test_vectorized_performance_50k_statement():
     """Verify detector processes 50,000 transactions in under 5.0 seconds (Target < 5s)."""
-    # Build 50,000 synthetic statement transactions with recurring charges & noise
     txs = []
     base_date = pd.Timestamp("2025-01-01")
-    descriptors = [
-        "NETFLIX INDIA MUMBAI", "SPOTIFY PREMIUM", "GOOGLE*YOUTUBE G.CO",
-        "AMAZON PRIME", "SWIGGY BANGALORE", "UBER TRIP INDIA", "LOCAL GROCERY STORE"
-    ]
 
-    for i in range(50000):
-        d_idx = i % len(descriptors)
-        # Recurring every ~30 days for subscriptions, random dates for others
-        day_offset = (i % 360) + (i // 1000)
+    # 1. Genuine monthly subscriptions (12 monthly charges each at 30-day intervals)
+    for m in range(12):
+        txs.append({"date": (base_date + pd.DateOffset(months=m, days=5)).strftime("%Y-%m-%d"), "descriptor": "NETFLIX INDIA MUMBAI", "amount": 649.0, "ref": f"NFLX_{m}"})
+        txs.append({"date": (base_date + pd.DateOffset(months=m, days=12)).strftime("%Y-%m-%d"), "descriptor": "SPOTIFY PREMIUM", "amount": 119.0, "ref": f"SPOT_{m}"})
+        txs.append({"date": (base_date + pd.DateOffset(months=m, days=18)).strftime("%Y-%m-%d"), "descriptor": "GOOGLE*YOUTUBE G.CO", "amount": 189.0, "ref": f"YTB_{m}"})
+
+    # 2. Fill the remaining ~49,964 transactions with noise (Swiggy, Uber, grocery)
+    noise_descs = ["SWIGGY BANGALORE", "UBER TRIP INDIA", "LOCAL GROCERY STORE", "AMAZON.IN RETAIL"]
+    for i in range(50000 - len(txs)):
+        d_idx = i % len(noise_descs)
+        day_offset = (i * 7) % 360
         dt = base_date + pd.Timedelta(days=day_offset)
-        amt = 649.00 if d_idx == 0 else (119.00 if d_idx == 1 else 189.00 if d_idx == 2 else 150.0 + (i % 50))
+        amt = round(150.0 + (i % 250), 2)
         txs.append({
             "date": dt.strftime("%Y-%m-%d"),
-            "descriptor": descriptors[d_idx],
+            "descriptor": noise_descs[d_idx],
             "amount": amt,
-            "ref": f"REF_{i}"
+            "ref": f"NOISE_{i}"
         })
 
     t0 = time.time()

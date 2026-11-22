@@ -473,12 +473,20 @@ def analyze_statement(
         else:
             median_gap = 0.0
 
-        # Infer cadence with tolerance bands (supports Weekly, Monthly, Quarterly, Annual)
+        # Rapid non-subscription frequency check (< 14 days median gap)
+        if median_gap < 14:
+            rejected.append({
+                "descriptor": sample_desc,
+                "reason": f"Charges occur in rapid non-subscription frequency (<14 days median gap: {median_gap:.1f} days).",
+                "count": count,
+                "median_gap_days": median_gap,
+                "amounts": amounts[:5]
+            })
+            continue
+
+        # Infer cadence with tolerance bands (supports Monthly, Quarterly, Annual)
         cadence = None
-        if 5 <= median_gap <= 11: # Weekly ±3 days
-            cadence = "WEEKLY"
-            annual_multiplier = 52.0
-        elif 20 <= median_gap <= 40: # Monthly ±10 days
+        if 20 <= median_gap <= 40: # Monthly ±10 days
             cadence = "MONTHLY"
             annual_multiplier = 12.0
         elif 75 <= median_gap <= 115: # Quarterly ±20 days
@@ -487,17 +495,24 @@ def analyze_statement(
         elif 335 <= median_gap <= 395: # Annual ±30 days
             cadence = "ANNUAL"
             annual_multiplier = 1.0
-        elif month_span >= 2: # Charges recur across multiple calendar months (e.g. multi-channel duplicates)
-            month_diffs = pd.Series([m.to_timestamp() for m in calendar_months]).diff().dt.days.dropna().tolist()
-            month_median_gap = float(np.median(month_diffs)) if month_diffs else 30.0
-            if 25 <= month_median_gap <= 35:
-                cadence = "MONTHLY"
-                annual_multiplier = 12.0
 
         if not cadence:
             rejected.append({
                 "descriptor": sample_desc,
-                "reason": f"Irregular interval (median gap: {median_gap:.1f} days, month span: {month_span}) does not align with weekly, monthly, quarterly or annual cadence.",
+                "reason": f"Irregular interval (median gap: {median_gap:.1f} days, month span: {month_span}) does not align with monthly, quarterly or annual cadence.",
+                "count": count,
+                "median_gap_days": median_gap,
+                "amounts": amounts[:5]
+            })
+            continue
+
+        # Reject high monthly frequency (count charges per month, not months with charges)
+        charges_by_month = date_series.dt.to_period("M").value_counts()
+        mean_charges_per_month = float(charges_by_month.mean()) if len(charges_by_month) > 0 else 1.0
+        if cadence == "MONTHLY" and mean_charges_per_month > 1.8:
+            rejected.append({
+                "descriptor": sample_desc,
+                "reason": f"Discretionary high-frequency purchases ({mean_charges_per_month:.1f} charges/month) do not represent a monthly standing instruction.",
                 "count": count,
                 "median_gap_days": median_gap,
                 "amounts": amounts[:5]

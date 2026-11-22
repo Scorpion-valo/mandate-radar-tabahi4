@@ -378,14 +378,9 @@ async def upload_statement_csv(
         # Check for signed amount layout (negative = debit, positive = credit)
         has_signed_amounts = False
         if not credit_col and not type_col:
-            sample_clean = []
-            for v in df[amt_col].dropna().head(50):
-                clean_v = str(v).replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "").replace("$", "").strip()
-                try:
-                    sample_clean.append(float(clean_v))
-                except ValueError:
-                    pass
-            has_signed_amounts = any(v < 0 for v in sample_clean) and any(v > 0 for v in sample_clean)
+            clean_s = df[amt_col].astype(str).str.replace(r"[^\d.-]", "", regex=True)
+            num_s = pd.to_numeric(clean_s, errors="coerce")
+            has_signed_amounts = bool((num_s < 0).any())
 
         for idx, row in df.iterrows():
             # 1. Credit Column: If credit column has positive amount, drop credit transaction

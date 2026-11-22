@@ -115,35 +115,27 @@ REFERENCE_MERCHANTS = [
         "cancellation_pitfall": "Manage directly in Play Store under Payments & Subscriptions."
     },
 
-    # Amazon.com footprint
+    # Amazon.com footprint (specific sub-merchants placed before amazon_prime to avoid false positives)
     {
-        "id": "amazon_prime",
-        "name": "Amazon Prime India",
-        "category": "E-Commerce & Entertainment",
+        "id": "aws_cloud",
+        "name": "Amazon Web Services (AWS)",
+        "category": "Cloud & Infrastructure",
         "parent": "Amazon.com Inc.",
         "parent_id": "amazon",
-        "official_website": "https://www.amazon.in/prime",
-        "logo": "https://cdn.simpleicons.org/amazon/FF9900",
-        "default_amount": 299.0,
-        "supported_cadences": ["MONTHLY", "QUARTERLY", "ANNUAL"],
+        "official_website": "https://aws.amazon.com",
+        "logo": "https://cdn.simpleicons.org/amazonwebservices/232F3E",
+        "default_amount": 1200.0,
+        "supported_cadences": ["MONTHLY"],
         "descriptors": [
-            r"\bAMZN\b",
-            r"\bAMAZON\b",
-            r"AMZN\*",
-            r"AMAZON\s+PAY",
-            r"AMZN\s+PAY",
-            r"AMAZON\.IN",
-            r"AMZN\s+PRIME\s+IN\*\d+",
-            r"AMAZON\s+PRIME\s+MEMBER",
-            r"AMZN\*PRIME\s+RECURRING",
-            r"AMAZON\s+SELLER\s+SERVICES\s+PRIME",
-            r"UPI/CR/\d+/AMAZON/PRIME",
-            r"ACH\s+D\s+AMAZON\s+PAY\s+INDIA"
+            r"AWS\*EMEA\s+ONLINE",
+            r"AMAZON\s+WEB\s+SERVICES\s+AWS",
+            r"AMZN\s+AWS\s+SERVICES",
+            r"POS\s+DEBIT\s+AMAZON\s+WEB\s+SERVICES"
         ],
-        "default_mechanism": "UPI_AUTOPAY",
-        "support_email": "cis@amazon.com",
+        "default_mechanism": "CARD_SI",
+        "support_email": "aws-verification@amazon.com",
         "grievance_email": "grievance-officer@amazon.in",
-        "cancellation_pitfall": "Amazon Prime hides the cancellation button behind 3 confirmation screens ('Keep My Benefits'). Complete all 3 screens until confirmation number is displayed."
+        "cancellation_pitfall": "Stopping credit card standing instructions without terminating EC2/RDS instances will incur ongoing debt collections and account suspension."
     },
     {
         "id": "prime_video",
@@ -164,6 +156,70 @@ REFERENCE_MERCHANTS = [
         "support_email": "cis@amazon.com",
         "grievance_email": "grievance-officer@amazon.in",
         "cancellation_pitfall": "Prime Video is included in Amazon Prime membership."
+    },
+    {
+        "id": "kindle_unlimited",
+        "name": "Kindle Unlimited",
+        "category": "Books & Reading",
+        "parent": "Amazon.com Inc.",
+        "parent_id": "amazon",
+        "official_website": "https://www.amazon.in/kindle-dbs/hz/signup",
+        "logo": "https://cdn.simpleicons.org/amazon/FF9900",
+        "default_amount": 169.0,
+        "supported_cadences": ["MONTHLY"],
+        "descriptors": [
+            r"KINDLE\*UNLIMITED\s+IN",
+            r"AMZN\*KINDLE\s+UNLIMITED",
+            r"AMAZON\s+KINDLE\s+SUB"
+        ],
+        "default_mechanism": "UPI_AUTOPAY",
+        "support_email": "kindle-cs-support@amazon.in",
+        "grievance_email": "grievance-officer@amazon.in",
+        "cancellation_pitfall": "Borrowing list locks instantly; downloaded books disappear from Kindle device upon cancellation billing cycle end."
+    },
+    {
+        "id": "audible_india",
+        "name": "Audible India",
+        "category": "Audiobooks & Media",
+        "parent": "Amazon.com Inc.",
+        "parent_id": "amazon",
+        "official_website": "https://www.audible.in",
+        "logo": "https://cdn.simpleicons.org/audible/F8991C",
+        "default_amount": 199.0,
+        "supported_cadences": ["MONTHLY"],
+        "descriptors": [
+            r"AUDIBLE\*IN\*\d+",
+            r"AUDIBLE\s+MEDIA\s+IN",
+            r"AMZN\*AUDIBLE\s+SUBS",
+            r"UPI/CR/\d+/AUDIBLE"
+        ],
+        "default_mechanism": "UPI_AUTOPAY",
+        "support_email": "customersupport@audible.in",
+        "grievance_email": "grievance-officer@amazon.in",
+        "cancellation_pitfall": "Unused credits expire when you cancel Audible membership! Spend your accumulated credits before clicking cancel."
+    },
+    {
+        "id": "amazon_prime",
+        "name": "Amazon Prime India",
+        "category": "E-Commerce & Entertainment",
+        "parent": "Amazon.com Inc.",
+        "parent_id": "amazon",
+        "official_website": "https://www.amazon.in/prime",
+        "logo": "https://cdn.simpleicons.org/amazon/FF9900",
+        "default_amount": 299.0,
+        "supported_cadences": ["MONTHLY", "QUARTERLY", "ANNUAL"],
+        "descriptors": [
+            r"AMZN\s+PRIME\s+IN\*\d+",
+            r"AMAZON\s+PRIME\s+MEMBER",
+            r"AMZN\*PRIME\s+RECURRING",
+            r"AMAZON\s+SELLER\s+SERVICES\s+PRIME",
+            r"UPI/CR/\d+/AMAZON/PRIME",
+            r"ACH\s+D\s+AMAZON\s+PAY\s+INDIA"
+        ],
+        "default_mechanism": "UPI_AUTOPAY",
+        "support_email": "cis@amazon.com",
+        "grievance_email": "grievance-officer@amazon.in",
+        "cancellation_pitfall": "Amazon Prime hides the cancellation button behind 3 confirmation screens ('Keep My Benefits'). Complete all 3 screens until confirmation number is displayed."
     },
     {
         "id": "microsoft_365",
@@ -205,68 +261,6 @@ REFERENCE_MERCHANTS = [
         "support_email": "support@microsoft.com",
         "grievance_email": "grievance@microsoft.com",
         "cancellation_pitfall": "Standalone OneDrive is redundant if you have Microsoft 365."
-    },
-    {
-        "id": "audible_india",
-        "name": "Audible India",
-        "category": "Audiobooks & Media",
-        "parent": "Amazon.com Inc.",
-        "parent_id": "amazon",
-        "official_website": "https://www.audible.in",
-        "logo": "https://cdn.simpleicons.org/audible/F8991C",
-        "default_amount": 199.0,
-        "supported_cadences": ["MONTHLY"],
-        "descriptors": [
-            r"AUDIBLE\*IN\*\d+",
-            r"AUDIBLE\s+MEDIA\s+IN",
-            r"AMZN\*AUDIBLE\s+SUBS",
-            r"UPI/CR/\d+/AUDIBLE"
-        ],
-        "default_mechanism": "UPI_AUTOPAY",
-        "support_email": "customersupport@audible.in",
-        "grievance_email": "grievance-officer@amazon.in",
-        "cancellation_pitfall": "Unused credits expire when you cancel Audible membership! Spend your accumulated credits before clicking cancel."
-    },
-    {
-        "id": "aws_cloud",
-        "name": "Amazon Web Services (AWS)",
-        "category": "Cloud & Infrastructure",
-        "parent": "Amazon.com Inc.",
-        "parent_id": "amazon",
-        "official_website": "https://aws.amazon.com",
-        "logo": "https://cdn.simpleicons.org/amazonwebservices/232F3E",
-        "default_amount": 1200.0,
-        "supported_cadences": ["MONTHLY"],
-        "descriptors": [
-            r"AWS\*EMEA\s+ONLINE",
-            r"AMAZON\s+WEB\s+SERVICES\s+AWS",
-            r"AMZN\s+AWS\s+SERVICES",
-            r"POS\s+DEBIT\s+AMAZON\s+WEB\s+SERVICES"
-        ],
-        "default_mechanism": "CARD_SI",
-        "support_email": "aws-verification@amazon.com",
-        "grievance_email": "grievance-officer@amazon.in",
-        "cancellation_pitfall": "Stopping credit card standing instructions without terminating EC2/RDS instances will incur ongoing debt collections and account suspension."
-    },
-    {
-        "id": "kindle_unlimited",
-        "name": "Kindle Unlimited",
-        "category": "Books & Reading",
-        "parent": "Amazon.com Inc.",
-        "parent_id": "amazon",
-        "official_website": "https://www.amazon.in/kindle-dbs/hz/signup",
-        "logo": "https://cdn.simpleicons.org/amazon/FF9900",
-        "default_amount": 169.0,
-        "supported_cadences": ["MONTHLY"],
-        "descriptors": [
-            r"KINDLE\*UNLIMITED\s+IN",
-            r"AMZN\*KINDLE\s+UNLIMITED",
-            r"AMAZON\s+KINDLE\s+SUB"
-        ],
-        "default_mechanism": "UPI_AUTOPAY",
-        "support_email": "kindle-cs-support@amazon.in",
-        "grievance_email": "grievance-officer@amazon.in",
-        "cancellation_pitfall": "Borrowing list locks instantly; downloaded books disappear from Kindle device upon cancellation billing cycle end."
     },
 
     # Netflix Inc
