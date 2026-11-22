@@ -293,52 +293,54 @@ class Neo4jKnowledgeGraph:
         """Seeds curated bundle relationships, plans, and capabilities into live Neo4j Aura."""
         if not (self.is_connected and self.driver):
             return False, "Not connected to live Neo4j instance."
-        cypher = """
-        // 1. Constraints & Unique Indexes
-        CREATE CONSTRAINT unique_merchant_id IF NOT EXISTS FOR (m:Merchant) REQUIRE m.id IS UNIQUE;
-        CREATE CONSTRAINT unique_plan_id IF NOT EXISTS FOR (p:Plan) REQUIRE p.id IS UNIQUE;
-        CREATE CONSTRAINT unique_cap_id IF NOT EXISTS FOR (c:Capability) REQUIRE c.id IS UNIQUE;
-        CREATE CONSTRAINT unique_mandate_id IF NOT EXISTS FOR (mand:Mandate) REQUIRE mand.id IS UNIQUE;
-        CREATE CONSTRAINT unique_decision_key IF NOT EXISTS FOR (d:Decision) REQUIRE d.finding_key IS UNIQUE;
-
-        // 2. Capabilities
-        UNWIND $capabilities AS c
-        MERGE (cap:Capability {id: c.id})
-          ON CREATE SET cap.name = c.name, cap.category = c.category, cap.description = c.description;
-
-        // 3. Plans & Offers
-        UNWIND $plans AS pl
-        MERGE (plan:Plan {id: pl.id})
-          ON CREATE SET plan.name = pl.name, plan.tier = pl.tier, plan.monthly_cost = pl.monthly_cost, plan.annual_cost = pl.annual_cost
-        WITH pl, plan
-        MATCH (v:Merchant {id: pl.vendor_id})
-        MERGE (v)-[:OFFERS]->(plan);
-
-        // 4. Bundle Inclusions
-        UNWIND $bundles AS b
-        MATCH (plan:Plan {id: b.parent_plan_id}), (c:Merchant {id: b.child_vendor_id})
-        MERGE (plan)-[r:INCLUDES]->(c)
-        SET r.tier = b.tier, r.confidence = b.confidence, r.verified_on = date(b.verified_on), r.source_url = b.source_url, r.notes = b.notes
-        WITH b
-        MATCH (p:Merchant {id: b.parent_vendor_id}), (c:Merchant {id: b.child_vendor_id})
-        MERGE (p)-[r2:INCLUDES]->(c)
-        SET r2.tier = b.tier, r2.confidence = b.confidence, r2.verified_on = date(b.verified_on), r2.source_url = b.source_url, r2.notes = b.notes;
-
-        // 5. Vendor Capabilities
-        UNWIND $vendor_caps AS vc
-        MATCH (v:Merchant {id: vc.vendor_id}), (cap:Capability {id: vc.capability_id})
-        MERGE (v)-[r:PROVIDES]->(cap)
-        SET r.confidence = vc.confidence, r.verified_on = date(vc.verified_on), r.source_url = vc.source_url, r.notes = vc.notes;
-        """
+        
+        statements = [
+            ("CREATE CONSTRAINT unique_merchant_id IF NOT EXISTS FOR (m:Merchant) REQUIRE m.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_plan_id IF NOT EXISTS FOR (p:Plan) REQUIRE p.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_cap_id IF NOT EXISTS FOR (c:Capability) REQUIRE c.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_mandate_id IF NOT EXISTS FOR (mand:Mandate) REQUIRE mand.id IS UNIQUE", {}),
+            ("CREATE CONSTRAINT unique_decision_key IF NOT EXISTS FOR (d:Decision) REQUIRE d.finding_key IS UNIQUE", {}),
+            (
+                """UNWIND $capabilities AS c
+                MERGE (cap:Capability {id: c.id})
+                  ON CREATE SET cap.name = c.name, cap.category = c.category, cap.description = c.description""",
+                {"capabilities": CAPABILITIES}
+            ),
+            (
+                """UNWIND $plans AS pl
+                MERGE (plan:Plan {id: pl.id})
+                  ON CREATE SET plan.name = pl.name, plan.tier = pl.tier, plan.monthly_cost = pl.monthly_cost, plan.annual_cost = pl.annual_cost
+                WITH pl, plan
+                MERGE (v:Merchant {id: pl.vendor_id})
+                MERGE (v)-[:OFFERS]->(plan)""",
+                {"plans": PLANS}
+            ),
+            (
+                """UNWIND $bundles AS b
+                MERGE (plan:Plan {id: b.parent_plan_id})
+                MERGE (c:Merchant {id: b.child_vendor_id})
+                MERGE (plan)-[r:INCLUDES]->(c)
+                SET r.tier = b.tier, r.confidence = b.confidence, r.source_url = b.source_url, r.notes = b.notes
+                WITH b
+                MERGE (p:Merchant {id: b.parent_vendor_id})
+                MERGE (c2:Merchant {id: b.child_vendor_id})
+                MERGE (p)-[r2:INCLUDES]->(c2)
+                SET r2.tier = b.tier, r2.confidence = b.confidence, r2.source_url = b.source_url, r2.notes = b.notes""",
+                {"bundles": CURATED_BUNDLES}
+            ),
+            (
+                """UNWIND $vendor_caps AS vc
+                MERGE (v:Merchant {id: vc.vendor_id})
+                MERGE (cap:Capability {id: vc.capability_id})
+                MERGE (v)-[r:PROVIDES]->(cap)
+                SET r.confidence = vc.confidence, r.source_url = vc.source_url, r.notes = vc.notes""",
+                {"vendor_caps": VENDOR_CAPABILITIES}
+            )
+        ]
         try:
             with self.driver.session() as session:
-                session.run(
-                    cypher,
-                    capabilities=CAPABILITIES,
-                    plans=PLANS,
-                    bundles=CURATED_BUNDLES,
-                    vendor_caps=VENDOR_CAPABILITIES
-                )
+                for stmt, params in statements:
+                    session.run(stmt, **params)
                 return True, "Successfully seeded reference graph (Capabilities, Plans, Inclusions, and Provides) into Neo4j Aura."
         except Exception as e:
             return False, f"Failed to seed reference graph into Neo4j Aura: {str(e)}"
