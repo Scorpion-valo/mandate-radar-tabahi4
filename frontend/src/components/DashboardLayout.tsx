@@ -1158,14 +1158,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
                 <button
                   onClick={runCypher}
-                  className="pill-fernwood-sand text-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto border border-[#E8E1D2]"
+                  className="px-3.5 py-1.5 rounded-xl bg-[#0E2419] text-[#2DE2B5] font-mono text-xs font-semibold flex items-center gap-1.5 hover:bg-[#163826] transition-colors cursor-pointer shadow-sm border border-[#2DE2B5]/30 self-start sm:self-auto"
+                  title="Executes Cypher query on Neo4j Aura to aggregate merchants by parent corporate entities"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#0E2419]" />
-                  <span>Execute Cypher Query</span>
+                  <Sparkles className="w-3.5 h-3.5 text-[#2DE2B5]" />
+                  <span>Run Neo4j Cypher Rollup</span>
                 </button>
               </div>
 
-              <div className="h-[520px] bg-[#0A100D] border border-[#E8E1D2] rounded-3xl overflow-hidden relative shadow-xl">
+              <div className="h-[580px] bg-[#0A100D] border border-[#E8E1D2] rounded-3xl overflow-hidden relative shadow-xl">
                 <GraphCanvas
                   nodes={dynamicGraph.nodes}
                   edges={dynamicGraph.edges}
