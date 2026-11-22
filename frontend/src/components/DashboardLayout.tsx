@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import type { Mandate, Finding, ReconciliationResult } from '../types'
 import { inr } from '../lib/format'
+import { authFetchJson } from '../lib/api'
 import { RadarView } from './RadarView'
 import { MandateDrawer } from './MandateDrawer'
 import { GraphCanvas, type GraphNode, type GraphEdge } from './GraphCanvas'
@@ -154,7 +155,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle mandate cancellation confirmation
   const handleConfirmCancelMandate = async (mandateId: string) => {
     try {
-      await fetch(`/api/mandates/${mandateId}/cancel-confirm?user_id=${userId}`, {
+      await authFetchJson(`/api/mandates/${mandateId}/cancel-confirm`, {
         method: 'POST'
       })
     } catch {}
@@ -186,10 +187,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle user scoped tag addition
   const handleAddMandateTag = async (mandateId: string, tag: string) => {
     try {
-      await fetch(`/api/mandates/${mandateId}/tags?user_id=${userId}`, {
+      await authFetchJson(`/api/mandates/${mandateId}/tags`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag, user_id: userId })
+        body: JSON.stringify({ tags: [tag] })
       })
     } catch {}
 
@@ -213,15 +214,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   // Handle graph finding decision confirmation
   const handleConfirmFindingDecision = async (findingId: string, keepMandateIds: string[]) => {
     try {
-      await fetch(`/api/findings/${findingId}/decision`, {
+      await authFetchJson(`/api/findings/${findingId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          finding_id: findingId,
+          finding_key: findingId,
           finding_type: 'overlap',
-          chosen_action: 'keep_selected',
-          confirmed_mandate_ids: keepMandateIds,
-          user_id: userId
+          choice: 'CONFIRMED',
+          kept_mandate_ids: keepMandateIds
         })
       })
     } catch {}
@@ -252,16 +252,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     const formData = new FormData()
     formData.append('file', file)
     formData.append('account_label', uploadAccountLabel || 'Primary Account')
-    formData.append('user_id', userId)
 
     try {
-      const res = await fetch('/api/statement/upload', {
+      const { ok, data, error } = await authFetchJson<any>('/api/statement/upload', {
         method: 'POST',
         body: formData
       })
 
-      if (!res.ok) throw new Error('Failed to analyze statement.')
-      const data = await res.json()
+      if (!ok || !data) throw new Error(error || 'Failed to analyze statement.')
 
       if (data.mandates && data.mandates.length > 0) {
         setLocalMandates(data.mandates)
@@ -508,22 +506,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   const runCypher = async () => {
     try {
-      const res = await fetch('/api/graph/cypher', {
+      const { ok, data } = await authFetchJson<any>('/api/graph/cypher', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: 'MATCH (u:Person)-[r:HAS_MANDATE]->(m:Mandate)-[:FOR_VENDOR]->(v:Vendor) RETURN v.name AS Parent, collect(m.merchant_name) AS ActiveMerchants, sum(m.annual_committed_cost) AS AnnualCommittedSpend'
         })
       })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.records && data.records.length > 0) {
-          setCypherResult({
-            summary: `Matched ${localMandates.length} recurring mandates against ${data.records.length} parent corporate entities in Neo4j.`,
-            results: data.records
-          })
-          return
-        }
+      if (ok && data?.records && data.records.length > 0) {
+        setCypherResult({
+          summary: `Matched ${localMandates.length} recurring mandates against ${data.records.length} parent corporate entities in Neo4j.`,
+          results: data.records
+        })
+        return
       }
     } catch {}
 

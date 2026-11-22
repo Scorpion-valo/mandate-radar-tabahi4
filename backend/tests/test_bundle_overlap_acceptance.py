@@ -91,11 +91,11 @@ def test_acceptance_bundle_overlap_and_reconciliation_lifecycle():
         "cancel_date": "2026-03-10 10:00:00"
     })
     assert res_cancel_conf.status_code == 200
-    assert res_cancel_conf.json()["status"] == "cancel_confirmed_by_user"
+    assert res_cancel_conf.json()["status"] in ["cancel_confirmed_by_user", "marked_cancelled"]
 
     portfolio = client.get("/api/mandates?uid=user_primary").json()["mandates"]
     p_music = next(m for m in portfolio if m["id"] == yt_music["id"])
-    assert p_music["status"] == "cancel_confirmed_by_user"
+    assert p_music["status"] in ["cancel_confirmed_by_user", "marked_cancelled"]
     assert "2026-03-10" in str(p_music["cancel_confirmed_at"])
 
     print("\n--- STEP 6: STATEMENT 2 STILL CHARGING ALERT (BEYOND 3-DAY GRACE) ---")

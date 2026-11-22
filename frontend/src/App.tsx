@@ -41,6 +41,29 @@ export default function App() {
     }
   }, [toastNotification])
 
+  // Handle 401 Unauthorized: clear state, return to opening stage, and open login without infinite loop
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setCurrentUser({
+        id: 'usr_new',
+        name: 'New User',
+        email: '',
+        phone: '',
+        accountLabel: 'Primary Statement',
+        isDemo: false
+      })
+      setMandates([])
+      setHeroMetrics(EMPTY_HERO_METRICS)
+      setStage('opening')
+      setAuthModalMode('signin')
+      setAuthModalOpen(true)
+      setToastNotification('Session expired or authentication required. Please sign in.')
+    }
+
+    window.addEventListener('mandate_radar:unauthorized', handleUnauthorized)
+    return () => window.removeEventListener('mandate_radar:unauthorized', handleUnauthorized)
+  }, [])
+
   // Current User Session (Persisted in localStorage, production-ready)
   const [currentUser, setCurrentUser] = useState<{
     id: string

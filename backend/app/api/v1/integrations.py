@@ -18,6 +18,7 @@ from app.services.integrations.gmail_client import GmailClient
 from app.services.pre_debit_matcher import PreDebitMatcher
 from app.services.merchant_resolver import MerchantResolver
 from app.services.deduplication import TransactionDeduplicator
+from app.api.v1.auth import get_current_user
 from app.models.transaction import Transaction
 from app.models.account import Account
 from app.models.user import User
@@ -57,12 +58,11 @@ class PairVerifyRequest(BaseModel):
 # Status & Telemetry
 # ---------------------------------------------------------
 @router.get("/status")
-def get_integrations_status(db: Session = Depends(get_db)):
+def get_integrations_status(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Returns real-time status of connected Gmail accounts, paired Android devices, and metrics.
     """
-    user = db.query(User).first()
-    user_id = user.id if user else "user_default"
+    user_id = current_user.id
 
     gmail_cred = db.query(IntegrationCredential).filter(
         IntegrationCredential.user_id == user_id,
@@ -108,6 +108,11 @@ def get_integrations_status(db: Session = Depends(get_db)):
                 "last_sync": sms_cred.last_sync_at.isoformat() if (sms_cred and sms_cred.last_sync_at) else None,
                 "dlt_filtering": True,
                 "notification_listener_ready": True
+            },
+            "sms_receiver": {
+                "active": True,
+                "paired": sms_cred is not None and sms_cred.pairing_token is not None,
+                "last_sync": sms_cred.last_sync_at.isoformat() if (sms_cred and sms_cred.last_sync_at) else None
             }
         },
         "metrics": metrics
@@ -188,6 +193,30 @@ def handle_gmail_oauth_callback(
         "success": True,
         "message": f"Successfully connected Gmail ({email_addr})",
         "initial_sync": sync_res
+    }
+
+class GmailSyncBatchPayload(BaseModel):
+    messages: List[Dict[str, Any]]
+
+@router.post("/gmail/sync")
+def ingest_gmail_batch(payload: GmailSyncBatchPayload):
+    """
+    Parses and ingests a batch of raw email messages.
+    """
+    receipts = []
+    for msg in payload.messages:
+        parsed = GmailSyncService.parse_email(
+            subject=msg.get("subject", ""),
+            sender=msg.get("sender", ""),
+            body=msg.get("body", "")
+        )
+        if parsed.get("is_financial"):
+            receipts.append(parsed)
+    return {
+        "status": "SUCCESS",
+        "total_messages": len(payload.messages),
+        "financial_receipts_found": len(receipts),
+        "receipts": receipts
     }
 
 @router.post("/gmail/sync-now")
