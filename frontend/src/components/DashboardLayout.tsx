@@ -460,7 +460,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     formData.append('account_label', uploadAccountLabel || 'Primary Account')
 
     try {
-      const res = await apiFetch('/api/statement/upload', {
+      const { ok, data, error } = await authFetchJson<any>('/api/statement/upload', {
         method: 'POST',
         body: formData
       })
@@ -724,7 +724,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   const runCypher = async () => {
     try {
-      const res = await apiFetch('/api/graph/cypher', {
+      const { ok, data } = await authFetchJson<any>('/api/graph/cypher', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
