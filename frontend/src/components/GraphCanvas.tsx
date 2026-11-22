@@ -53,6 +53,15 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const simEdgesRef = useRef<GraphEdge[]>([])
   const animFrameIdRef = useRef<number | null>(null)
 
+  // Auto-adapt canvas scale for large multi-node datasets
+  useEffect(() => {
+    if (nodes && nodes.length > 15) {
+      setTransform({ x: 0, y: 0, scale: 0.82 })
+    } else {
+      setTransform({ x: 0, y: 0, scale: 0.95 })
+    }
+  }, [nodes?.length, currentMode])
+
   // Calculate total overlap count and annual savings from active edges
   const overlapEdges = edges.filter(e => e.type === 'OVERLAPS_WITH')
   const totalOverlapSavings = overlapEdges.reduce((acc, e) => acc + (e.properties?.savings || 0), 0)

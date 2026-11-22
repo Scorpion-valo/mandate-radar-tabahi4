@@ -236,14 +236,6 @@ export const GraphGuide: React.FC<GraphGuideProps> = ({
                 Full Catalog (80 Reference Nodes)
               </button>
             </div>
-
-            <button
-              onClick={onRunCypher}
-              className="px-3.5 py-1.5 rounded-xl bg-[#0E2419] text-[#2DE2B5] font-mono text-xs font-semibold flex items-center gap-1.5 hover:bg-[#163826] transition-colors cursor-pointer shadow-sm"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Run Cypher Aggregation</span>
-            </button>
           </div>
         </div>
       )}
