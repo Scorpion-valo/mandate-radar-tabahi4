@@ -234,14 +234,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setOtpTimer(60)
       setMode('otp')
       setIsLoading(false)
-      setToastMsg(`Verification code sent via SMS to ${fullE164Phone}`)
+      setToastMsg(`Verification code dispatched to ${fullE164Phone}`)
     } catch (err: any) {
+      console.error('Firebase phone auth error:', err)
       setIsLoading(false)
       if (recaptchaVerifierRef.current) {
         try { recaptchaVerifierRef.current.clear() } catch {}
         recaptchaVerifierRef.current = null
       }
-      setErrorMessage(err.message || 'Failed to dispatch SMS verification code. Please check your network and number.')
+      const code = err?.code || ''
+      let msg = err?.message || 'Failed to dispatch SMS verification code.'
+      if (code === 'auth/unauthorized-domain') {
+        msg = `Domain "${window.location.hostname}" is not authorized in Firebase Console (Authentication > Settings > Authorized domains).`
+      } else if (code === 'auth/billing-not-enabled' || code === 'auth/quota-exceeded') {
+        msg = 'Carrier SMS quota reached or Blaze billing required. Please configure a Firebase Test Number in Firebase Console.'
+      } else if (code === 'auth/operation-not-allowed') {
+        msg = 'Phone Sign-In is disabled in Firebase Console (Authentication > Sign-in method > Phone).'
+      }
+      setErrorMessage(msg)
     }
   }
 
@@ -598,6 +608,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 placeholder="e.g. Rahul Sharma"
                 className="w-full px-3.5 py-2.5 text-xs bg-[#0E1F17] border border-white/15 text-white rounded-xl focus:border-[#2DE2B5] focus:outline-none"
               />
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-[11px] text-[#9BAEA2] space-y-1">
+              <div className="text-white font-medium flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-[#2DE2B5]" />
+                <span>Firebase Phone Authentication</span>
+              </div>
+              <p>For instant testing without carrier SMS delays or quotas, configure test numbers in Firebase Console (e.g. <code>+91 9999999999</code> with code <code>123456</code>).</p>
             </div>
 
             <button

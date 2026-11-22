@@ -129,8 +129,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
     const nodes: GraphNode[] = []
     const edges: GraphEdge[] = []
-    const parentMap = new Map<string, string>()
+    const parentMap = new Map<string, { name: string; cost: number; count: number }>()
     const railMap = new Map<string, string>()
+
+    // Calculate total annual exposure across all active user mandates
+    const totalCommitted = localMandates.reduce((acc, m) => acc + (m.annual_committed_cost || 0), 0)
 
     // 1. Center User Node
     nodes.push({
@@ -139,13 +142,66 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       name: activeUserName,
       type: 'person',
       group: 'person',
-      properties: { name: activeUserName, role: 'Account Holder' }
+      properties: { name: activeUserName, role: 'Account Holder', cost: totalCommitted, count: localMandates.length }
+    })
+
+    // Track which mandates overlap
+    const overlapPairs: { i: number; j: number; savings: number; reason: string }[] = []
+    for (let i = 0; i < localMandates.length; i++) {
+      for (let j = i + 1; j < localMandates.length; j++) {
+        const m1 = localMandates[i]
+        const m2 = localMandates[j]
+        const n1 = (m1.merchant_name || m1.descriptor || '').toLowerCase()
+        const n2 = (m2.merchant_name || m2.descriptor || '').toLowerCase()
+        const c1 = (m1.category || '').toLowerCase()
+        const c2 = (m2.category || '').toLowerCase()
+
+        let isOverlap = false
+        let reason = ''
+        const savings = Math.min(m1.annual_committed_cost || 0, m2.annual_committed_cost || 0)
+
+        // Duplicate merchant across channels or descriptors (e.g. CloudStore, InsureCo)
+        if (n1 && n2 && (n1.includes(n2) || n2.includes(n1) || (n1.includes('cloud') && n2.includes('cloud')))) {
+          isOverlap = true
+          reason = 'Duplicate Subscription Mandates'
+        }
+        // Streaming video overlap (Netflix, Amazon Prime, Hotstar, Disney, StreamPlus)
+        else if ((n1.includes('netflix') || n1.includes('prime') || n1.includes('hotstar') || n1.includes('disney') || n1.includes('stream')) &&
+                 (n2.includes('netflix') || n2.includes('prime') || n2.includes('hotstar') || n2.includes('disney') || n2.includes('stream'))) {
+          isOverlap = true
+          reason = 'Redundant OTT Video Subscriptions'
+        }
+        // Audio / Music streaming overlap (Spotify, YouTube Music)
+        else if ((n1.includes('spotify') || n1.includes('youtube') || n1.includes('music')) &&
+                 (n2.includes('spotify') || n2.includes('youtube') || n2.includes('music'))) {
+          isOverlap = true
+          reason = 'Duplicate Music Streaming Catalog'
+        }
+        // Same category overlap
+        else if (c1 && c2 && c1 === c2 && (c1.includes('stream') || c1.includes('entertainment') || c1.includes('audio'))) {
+          isOverlap = true
+          reason = `Redundant ${m1.category} Overlap`
+        }
+
+        if (isOverlap) {
+          overlapPairs.push({ i, j, savings, reason })
+        }
+      }
+    }
+
+    const overlapNodeIndices = new Set<number>()
+    overlapPairs.forEach(p => {
+      overlapNodeIndices.add(p.i)
+      overlapNodeIndices.add(p.j)
     })
 
     localMandates.forEach((m, idx) => {
       // 2. Merchant / Mandate Node
       const merchantNodeId = `node_${m.id || idx}`
       const mName = m.merchant_name || m.descriptor
+      const hasOverlap = overlapNodeIndices.has(idx)
+      const matchingPair = overlapPairs.find(p => p.i === idx || p.j === idx)
+
       nodes.push({
         id: merchantNodeId,
         label: mName,
@@ -159,33 +215,33 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           amount: m.latest_amount,
           rail: m.mechanism,
           flag: m.flag,
-          category: m.category
+          category: m.category,
+          hasOverlap,
+          overlapSavings: matchingPair?.savings || 0,
+          overlapReason: matchingPair?.reason || ''
         }
       })
 
       // Edge from User to Merchant
+      const cadenceText = m.cadence === 'MONTHLY' ? '/mo' : m.cadence === 'QUARTERLY' ? '/qtr' : m.cadence === 'WEEKLY' ? '/wk' : '/yr'
       edges.push({
         id: `edge_comm_${idx}`,
         source: centerUserId,
         target: merchantNodeId,
         type: 'COMMITTED_TO',
-        label: `₹${m.latest_amount}`,
+        label: `₹${m.latest_amount?.toLocaleString('en-IN')}${cadenceText}`,
         properties: { amount: m.latest_amount, cadence: m.cadence }
       })
 
       // 3. Parent Conglomerate Node
-      const parentName = m.parent_name || (m.merchant_name ? m.merchant_name.split(' ')[0] : 'Independent')
+      const parentName = m.parent_name || (mName.toLowerCase().includes('google') ? 'Alphabet Inc' : mName.toLowerCase().includes('amazon') ? 'Amazon.com Inc' : mName.toLowerCase().includes('netflix') ? 'Netflix Inc' : mName.toLowerCase().includes('spotify') ? 'Spotify AB' : mName.toLowerCase().includes('disney') ? 'The Walt Disney Company' : mName.toLowerCase().includes('lic') ? 'Life Insurance Corp' : 'Independent Entity')
       const parentId = `parent_${parentName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
       if (!parentMap.has(parentId)) {
-        parentMap.set(parentId, parentName)
-        nodes.push({
-          id: parentId,
-          label: parentName,
-          name: parentName,
-          type: 'parent',
-          group: 'parent',
-          properties: { name: parentName }
-        })
+        parentMap.set(parentId, { name: parentName, cost: m.annual_committed_cost || 0, count: 1 })
+      } else {
+        const existing = parentMap.get(parentId)!
+        existing.cost += (m.annual_committed_cost || 0)
+        existing.count += 1
       }
 
       edges.push({
@@ -223,7 +279,35 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       })
     })
 
-    return { nodes, edges, stats: { merchant_count: localMandates.length, parent_count: parentMap.size } }
+    // Add aggregate Parent Nodes with combined fintech exposure
+    parentMap.forEach((val, pId) => {
+      nodes.push({
+        id: pId,
+        label: val.name,
+        name: val.name,
+        type: 'parent',
+        group: 'parent',
+        properties: { name: val.name, cost: val.cost, merchantCount: val.count }
+      })
+    })
+
+    // Add Overlap Edges
+    overlapPairs.forEach((p, idx) => {
+      edges.push({
+        id: `edge_overlap_${idx}`,
+        source: `node_${localMandates[p.i].id || p.i}`,
+        target: `node_${localMandates[p.j].id || p.j}`,
+        type: 'OVERLAPS_WITH',
+        label: `OVERLAP: Save ₹${p.savings.toLocaleString('en-IN')}`,
+        properties: {
+          category: localMandates[p.i].category,
+          savings: p.savings,
+          reason: p.reason
+        }
+      })
+    })
+
+    return { nodes, edges, stats: { merchant_count: localMandates.length, parent_count: parentMap.size, overlap_count: overlapPairs.length } }
   }, [localMandates, user?.name, userName, graphData])
 
   // Active User Context
@@ -1073,14 +1157,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
                 <button
                   onClick={runCypher}
-                  className="pill-fernwood-sand text-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto border border-[#E8E1D2]"
+                  className="px-3.5 py-1.5 rounded-xl bg-[#0E2419] text-[#2DE2B5] font-mono text-xs font-semibold flex items-center gap-1.5 hover:bg-[#163826] transition-colors cursor-pointer shadow-sm border border-[#2DE2B5]/30 self-start sm:self-auto"
+                  title="Executes Cypher query on Neo4j Aura to aggregate merchants by parent corporate entities"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#0E2419]" />
-                  <span>Execute Cypher Query</span>
+                  <Sparkles className="w-3.5 h-3.5 text-[#2DE2B5]" />
+                  <span>Run Neo4j Cypher Rollup</span>
                 </button>
               </div>
 
-              <div className="h-[520px] bg-[#0A100D] border border-[#E8E1D2] rounded-3xl overflow-hidden relative shadow-xl">
+              <div className="h-[580px] bg-[#0A100D] border border-[#E8E1D2] rounded-3xl overflow-hidden relative shadow-xl">
                 <GraphCanvas
                   nodes={dynamicGraph.nodes}
                   edges={dynamicGraph.edges}
