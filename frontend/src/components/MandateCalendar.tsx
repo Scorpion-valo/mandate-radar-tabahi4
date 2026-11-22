@@ -12,7 +12,8 @@ import {
   ArrowRight,
   ExternalLink,
   Flame,
-  Sparkles
+  Sparkles,
+  Download
 } from 'lucide-react'
 import type { Mandate } from '../types'
 import { inr } from '../lib/format'
@@ -59,6 +60,55 @@ export const MandateCalendar: React.FC<MandateCalendarProps> = ({
   const goToToday = () => {
     setCurrentDate(new Date())
     setSelectedDateStr(null)
+  }
+
+  const handleExportIcs = async () => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('mandate_radar_token') : null
+      const headers: Record<string, string> = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
+      const res = await fetch('/api/mandates/export.ics', { headers })
+      if (!res.ok) throw new Error('Failed')
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'mandate_radar_renewals.ics'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch {
+      const lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Mandate Radar//Auto-Debit Renewals//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH'
+      ]
+      scheduledDebits.forEach((d, i) => {
+        const dtStr = d.dateStr.replace(/-/g, '')
+        lines.push(
+          'BEGIN:VEVENT',
+          `UID:mandate_${i}_${dtStr}@mandateradar.in`,
+          `DTSTART;VALUE=DATE:${dtStr}`,
+          `SUMMARY:${d.mandate.merchant_name} (₹${d.amount})`,
+          `DESCRIPTION:Recurring ${d.cadence} debit via ${d.rail}.`,
+          'END:VEVENT'
+        )
+      })
+      lines.push('END:VCALENDAR')
+      const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'mandate_radar_renewals.ics'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    }
   }
 
   // Derive scheduled debits for this month based on mandate history and cadence
@@ -218,6 +268,14 @@ export const MandateCalendar: React.FC<MandateCalendarProps> = ({
 
         {/* Month Navigation & Controls */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportIcs}
+            className="px-3 py-1.5 text-xs font-medium rounded-xl bg-[#0E2419] text-[#2DE2B5] hover:bg-[#163826] transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+            title="Download Apple / Google Calendar (.ics) export"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export .ics</span>
+          </button>
           <button
             onClick={goToToday}
             className="px-3 py-1.5 text-xs font-medium rounded-xl bg-white border border-[#E8E1D2] text-[#0F1713] hover:bg-[#F8F5EE] transition-colors cursor-pointer"

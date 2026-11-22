@@ -36,6 +36,9 @@ export interface Mandate {
   mechanism_name: string
   flag: 'HEALTHY' | 'PRICE_HIKE' | 'TRIAL_CONVERTED' | 'UNUSED_ZOMBIE' | string
   flag_reason?: string
+  detection_reason?: string
+  status_reason?: string
+  match_method?: string
   confidence_score?: number
   savings_if_cancelled?: number
   pitfall?: string

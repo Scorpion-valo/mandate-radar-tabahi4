@@ -310,6 +310,22 @@ export function MandateDrawer({
           {m.flag_reason}
         </div>
 
+        {/* Explainability & Detection Rationale */}
+        {(m.detection_reason || m.status_reason) && (
+          <div className="p-3.5 rounded-xl border border-[#2DE2B5]/20 bg-[#0E2419]/60 text-xs text-[#BAC8BF] leading-relaxed space-y-1.5">
+            <div className="flex items-center justify-between">
+              <strong className="text-[#2DE2B5] font-mono text-[11px] uppercase tracking-wider">Detection Rationale</strong>
+              {m.confidence_score && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#2DE2B5]/20 text-[#2DE2B5]">
+                  Confidence: {Math.round(m.confidence_score * 100)}%
+                </span>
+              )}
+            </div>
+            {m.detection_reason && <p className="text-[#FAF8F5]">{m.detection_reason}</p>}
+            {m.status_reason && <p className="text-[#9BAEA2] text-[11px]">{m.status_reason}</p>}
+          </div>
+        )}
+
         {/* Last Charges History */}
         <div>
           <h4 className="text-xs font-mono uppercase text-[#BAC8BF] mb-2">Transaction History</h4>

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 import io
 import os
 import csv
@@ -34,8 +35,12 @@ from detector import (
     clean_descriptor,
     detect_payment_mechanism,
     parse_date_series,
-    DateParseError
+    DateParseError,
+    register_merchant_correction
 )
+from bank_adapters import find_table_header_line, resolve_bank_columns
+from fastapi.responses import Response
+import json
 from neo4j_service import Neo4jKnowledgeGraph
 
 from slowapi import _rate_limit_exceeded_handler
@@ -255,11 +260,12 @@ async def upload_statement_csv(
     file: UploadFile = File(...),
     account_label: str = Form("Primary Account"),
     user_id: Optional[str] = Form(None),
+    column_mapping: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Parses an uploaded bank statement CSV file with dynamic column mapping,
-    validates headers, handles empty or malformed files, runs detection,
+    Parses an uploaded bank statement CSV file with dynamic bank adapter matching (HDFC, ICICI, SBI, Axis, Kotak),
+    custom column mapping fallback, validates headers, handles empty or malformed files, runs vectorized detection,
     executes Neo4j bundle overlap, capability overlap, and duplicate vendor analyses,
     and performs post-cancellation reconciliation with 3-day grace window.
     Strictly protected with JWT Bearer authentication.
@@ -291,44 +297,53 @@ async def upload_statement_csv(
         except UnicodeDecodeError:
             text = content.decode("latin-1")
 
+        # Parse custom column mapping if submitted
+        custom_mapping = None
+        if column_mapping:
+            try:
+                custom_mapping = json.loads(column_mapping) if isinstance(column_mapping, str) else column_mapping
+            except Exception:
+                custom_mapping = None
+
+        # Automatically locate table header line (skipping customer metadata preambles)
+        header_idx = find_table_header_line(text)
+        csv_text = "\n".join(text.splitlines()[header_idx:]) if header_idx > 0 else text
+
         # Read with pandas
-        csv_io = io.StringIO(text)
+        csv_io = io.StringIO(csv_text)
         df = pd.read_csv(csv_io)
 
         if df.empty:
             raise HTTPException(status_code=400, detail="The CSV file has headers but contains zero rows.")
 
-        # Identify columns
+        # Resolve columns using Bank Adapters (HDFC, ICICI, SBI, Axis, Kotak) or generic synonyms
+        bank_map = resolve_bank_columns(df, custom_mapping)
+        date_col = bank_map.get("date")
+        desc_col = bank_map.get("description")
+        debit_col = bank_map.get("debit")
+        credit_col = bank_map.get("credit")
+        ref_col = bank_map.get("ref")
+        type_col = bank_map.get("type")
+        amt_col = debit_col
+        bank_detected = bank_map.get("bank_detected", "Generic Bank Statement")
+
         cols = {c.strip().lower(): c for c in df.columns}
-        date_col = next((cols[k] for k in [
-            "date", "transactiontimestamp", "valuedate", "txn_date", 
-            "transaction date", "value date", "trans date", "timestamp", "txn date", "time"
-        ] if k in cols), None)
-        desc_col = next((cols[k] for k in [
-            "descriptor", "description", "narration", "particulars", 
-            "remarks", "details", "txn narration", "transaction narration"
-        ] if k in cols), None)
+        if not date_col:
+            date_col = next((cols[k] for k in [
+                "date", "transactiontimestamp", "valuedate", "txn_date", 
+                "transaction date", "value date", "trans date", "timestamp", "txn date", "time"
+            ] if k in cols), None)
+        if not desc_col:
+            desc_col = next((cols[k] for k in [
+                "descriptor", "description", "narration", "particulars", 
+                "remarks", "details", "txn narration", "transaction narration"
+            ] if k in cols), None)
+        if not amt_col:
+            amt_col = next((cols[k] for k in [
+                "amount", "txn amount", "amount (inr)", 
+                "txn_amount", "transaction amount", "debit", "withdrawal"
+            ] if k in cols), None)
 
-        # Separate Debit / Credit column detection
-        debit_col = next((cols[k] for k in [
-            "debit", "withdrawal", "debit amount", "withdrawal amount", "dr"
-        ] if k in cols), None)
-        credit_col = next((cols[k] for k in [
-            "credit", "deposit", "credit amount", "deposit amount", "cr"
-        ] if k in cols), None)
-
-        amt_col = debit_col or next((cols[k] for k in [
-            "amount", "txn amount", "amount (inr)", 
-            "txn_amount", "transaction amount"
-        ] if k in cols), None)
-
-        type_col = next((cols[k] for k in [
-            "type", "dr/cr", "cr/dr", "indicator", "txn type", "transaction type"
-        ] if k in cols), None)
-
-        ref_col = next((cols[k] for k in [
-            "ref", "reference", "chq/ref no.", "utr", "txn id", "id", "txnid"
-        ] if k in cols), None)
         channel_col = next((cols[k] for k in [
             "channel", "rail", "payment_channel", "payment_mode", "mode", "payment_mechanism"
         ] if k in cols), None)
@@ -576,6 +591,7 @@ async def upload_statement_csv(
         analysis_result["rows_parsed"] = len(transactions)
         analysis_result["account_label"] = acc_label
         analysis_result["user_id"] = uid
+        analysis_result["bank_detected"] = bank_detected
 
         return analysis_result
 
@@ -863,6 +879,126 @@ def get_mandates_portfolio(
         "user_id": user_id,
         "total_mandates": len(portfolio),
         "mandates": portfolio
+    }
+
+def build_mandates_ics(mandates: List[Dict[str, Any]]) -> str:
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Mandate Radar//Auto-Debit Renewals//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:Mandate Radar Renewals"
+    ]
+    now_stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+    for m in mandates:
+        cad = str(m.get("cadence", "MONTHLY")).upper()
+        freq = "MONTHLY" if "MONTH" in cad else "YEARLY" if "ANNUAL" in cad else "WEEKLY" if "WEEK" in cad else "MONTHLY"
+        next_dt_str = m.get("expected_next_charge_date") or m.get("next_expected_debit") or m.get("last_charged") or datetime.utcnow().strftime("%Y-%m-%d")
+        dt_clean = re.sub(r"\D", "", str(next_dt_str))[:8]
+        if len(dt_clean) != 8:
+            dt_clean = datetime.utcnow().strftime("%Y%m%d")
+
+        m_name = m.get("merchant_name", "Recurring Subscription")
+        amt = m.get("latest_amount", m.get("amount", 0.0))
+        rail = m.get("mechanism") or m.get("mandate_type") or "Auto-Debit"
+        m_id = m.get("id", "mandate_0")
+
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{m_id}@mandateradar.in",
+            f"DTSTAMP:{now_stamp}",
+            f"DTSTART;VALUE=DATE:{dt_clean}",
+            f"RRULE:FREQ={freq}",
+            f"SUMMARY:{m_name} Auto-Debit (₹{float(amt):.2f})",
+            f"DESCRIPTION:Mandate Radar recurring debit tracking. Amount: ₹{float(amt):.2f} via {rail}.",
+            "BEGIN:VALARM",
+            "TRIGGER:-P2D",
+            "ACTION:DISPLAY",
+            f"DESCRIPTION:Mandate Radar Reminder: {m_name} renewal of ₹{float(amt):.2f} is due in 2 days.",
+            "END:VALARM",
+            "END:VEVENT"
+        ])
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+@app.get("/api/mandates/export.ics")
+def export_mandates_ics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Exports authenticated user's active mandates as an RFC 5545 standard iCalendar (.ics) file.
+    Can be imported into Google Calendar, Apple Calendar, or Microsoft Outlook.
+    """
+    user_id = str(current_user.id)
+    portfolio = neo4j_graph.get_user_mandates(user_id)
+    if not portfolio:
+        sql_mandates = db.query(Mandate).filter(Mandate.user_id == user_id).all()
+        portfolio = [
+            {
+                "id": m.id,
+                "merchant_name": m.merchant_name,
+                "latest_amount": float(m.latest_amount) if m.latest_amount else 0.0,
+                "cadence": m.cadence,
+                "mechanism": m.mandate_type,
+                "expected_next_charge_date": str(m.next_expected_debit) if m.next_expected_debit else None
+            }
+            for m in sql_mandates
+        ]
+
+    ics_content = build_mandates_ics(portfolio)
+    return Response(
+        content=ics_content,
+        media_type="text/calendar",
+        headers={
+            "Content-Disposition": 'attachment; filename="mandate_radar_renewals.ics"'
+        }
+    )
+
+class MerchantCorrectionRequest(BaseModel):
+    descriptor: str
+    merchant_name: str
+    category: Optional[str] = "Subscription"
+    parent_name: Optional[str] = "Independent"
+
+@app.post("/api/merchants/feedback")
+@app.post("/api/merchants/correct")
+def submit_merchant_feedback(
+    req: MerchantCorrectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    User feedback loop for fuzzy/unrecognised merchant correction.
+    Registers descriptor override and updates relevant mandates.
+    """
+    clean_desc = clean_descriptor(req.descriptor).strip().upper()
+    corrected_info = {
+        "id": req.merchant_name.lower().replace(" ", "_"),
+        "name": req.merchant_name.strip(),
+        "category": req.category or "Subscription",
+        "parent": req.parent_name or "Independent",
+        "descriptors": [req.descriptor.strip()]
+    }
+    register_merchant_correction(clean_desc, corrected_info)
+
+    user_id = str(current_user.id)
+    affected = db.query(Mandate).filter(
+        Mandate.user_id == user_id,
+        Mandate.descriptor.ilike(f"%{req.descriptor.strip()}%")
+    ).all()
+    for m in affected:
+        m.merchant_name = req.merchant_name.strip()
+        m.category = req.category or m.category
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Merchant '{req.merchant_name}' mapped to descriptor '{req.descriptor}'.",
+        "affected_mandates": len(affected)
     }
 
 @app.post("/api/mandates/{mandate_id}/cancel-confirm")
