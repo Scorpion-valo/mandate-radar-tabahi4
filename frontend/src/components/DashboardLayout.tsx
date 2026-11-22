@@ -115,8 +115,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   // Build dynamic Neo4j graph reflecting active user mandates
   const dynamicGraph = React.useMemo(() => {
+    const activeUserName = user?.name || userName || 'My Portfolio'
+    const centerUserId = 'usr_active_center'
+
     if (!localMandates || localMandates.length === 0) {
-      return graphData
+      const updatedNodes = (graphData.nodes || []).map(n =>
+        (n.type === 'user' || n.type === 'person' || n.group === 'user' || n.group === 'person')
+          ? { ...n, label: 'Account Holder', name: activeUserName, properties: { ...n.properties, name: activeUserName } }
+          : n
+      )
+      return { ...graphData, nodes: updatedNodes }
     }
 
     const nodes: GraphNode[] = []
@@ -125,28 +133,33 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     const railMap = new Map<string, string>()
 
     // 1. Center User Node
-    const centerUserId = 'usr_active_center'
     nodes.push({
       id: centerUserId,
-      label: user?.name || 'Active Account',
+      label: 'Account Holder',
+      name: activeUserName,
       type: 'person',
-      properties: { name: user?.name || 'Active Account', role: 'Account Holder' }
+      group: 'person',
+      properties: { name: activeUserName, role: 'Account Holder' }
     })
 
     localMandates.forEach((m, idx) => {
       // 2. Merchant / Mandate Node
       const merchantNodeId = `node_${m.id || idx}`
+      const mName = m.merchant_name || m.descriptor
       nodes.push({
         id: merchantNodeId,
-        label: m.merchant_name || m.descriptor,
+        label: mName,
+        name: mName,
         type: 'merchant',
+        group: 'merchant',
         properties: {
-          name: m.merchant_name,
+          name: mName,
           cost: m.annual_committed_cost,
           cadence: m.cadence,
           amount: m.latest_amount,
           rail: m.mechanism,
-          flag: m.flag
+          flag: m.flag,
+          category: m.category
         }
       })
 
@@ -156,6 +169,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         source: centerUserId,
         target: merchantNodeId,
         type: 'COMMITTED_TO',
+        label: `₹${m.latest_amount}`,
         properties: { amount: m.latest_amount, cadence: m.cadence }
       })
 
@@ -167,7 +181,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         nodes.push({
           id: parentId,
           label: parentName,
+          name: parentName,
           type: 'parent',
+          group: 'parent',
           properties: { name: parentName }
         })
       }
@@ -177,6 +193,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         source: merchantNodeId,
         target: parentId,
         type: 'OWNED_BY',
+        label: 'OWNED_BY',
         properties: {}
       })
 
@@ -189,7 +206,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         nodes.push({
           id: railId,
           label: railLabel,
+          name: railLabel,
           type: 'rail',
+          group: 'rail',
           properties: { name: railLabel }
         })
       }
@@ -199,12 +218,13 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         source: merchantNodeId,
         target: railId,
         type: 'ROUTED_VIA',
+        label: 'ROUTED_VIA',
         properties: {}
       })
     })
 
     return { nodes, edges, stats: { merchant_count: localMandates.length, parent_count: parentMap.size } }
-  }, [localMandates, user?.name, graphData])
+  }, [localMandates, user?.name, userName, graphData])
 
   // Active User Context
   const userId = user?.id || 'usr_primary'
@@ -712,7 +732,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   {user?.accountLabel || uploadAccountLabel || 'Primary Statement'}
                 </div>
                 <div className="text-[10px] font-mono text-[#BAC8BF]">
-                  {statementTxnCount > 0 ? statementTxnCount : (localMandates.reduce((acc, m) => acc + (m.charge_count || 1), 0) || 77)} Txns · {localMandates.length} Active Mandates
+                  {statementTxnCount > 0 ? statementTxnCount : (localMandates.length > 0 ? localMandates.reduce((acc, m) => acc + (m.charge_count || 1), 0) : 0)} Txns · {localMandates.length} Active Mandates
                 </div>
               </div>
             </div>

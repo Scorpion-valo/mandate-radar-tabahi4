@@ -59,6 +59,10 @@ class Neo4jKnowledgeGraph:
             self.driver.verify_connectivity()
             self.is_connected = True
             self.connection_error = None
+            try:
+                self.seed_bundle_reference_graph()
+            except Exception as se:
+                print(f"Auto-seed warning on connect: {se}")
             return True, "Successfully connected to Neo4j instance!"
         except Exception as e:
             self.is_connected = False
@@ -749,6 +753,7 @@ class Neo4jKnowledgeGraph:
                 "flag_reason": mand.get("flag_reason", ""),
                 "descriptor": mand.get("descriptor", ""),
                 "merchant_id": mand.get("merchant_id"),
+                "merchant_name": mand.get("merchant_name") or mand.get("descriptor") or mand.get("merchant_id"),
                 "mechanism": mand.get("mechanism", "CARD_SI"),
                 "expected_next_charge_date": expected_next,
                 "cancel_confirmed_at": cancel_confirmed_at,
@@ -791,7 +796,7 @@ class Neo4jKnowledgeGraph:
                 WITH mand, m
                 WHERE m.merchant_id IS NOT NULL
                 MERGE (merch:Merchant {id: m.merchant_id})
-                SET merch:Vendor
+                SET merch:Vendor, merch.name = coalesce(m.merchant_name, merch.name, m.merchant_id)
                 MERGE (mand)-[:FOR]->(merch)
                 MERGE (mand)-[:CHARGES]->(merch);
                 """
@@ -842,7 +847,7 @@ class Neo4jKnowledgeGraph:
         MATCH path = (a)-[:OFFERS|INCLUDES*1..6]->(b)
         RETURN ma, mb, a, b,
                [n in nodes(path) | coalesce(n.name, n.id)] AS path_names,
-               [r in relationships(path) | {confidence: coalesce(r.confidence, 'confirmed_public'), notes: coalesce(r.notes, ''), source_url: coalesce(r.source_url, 'TODO: fill link'), verified_on: coalesce(str(r.verified_on), DEFAULT_VERIFIED_DATE)}] AS path_rels
+               [r in relationships(path) | {confidence: coalesce(r.confidence, 'confirmed_public'), notes: coalesce(r.notes, ''), source_url: coalesce(r.source_url, 'TODO: fill link'), verified_on: coalesce(toString(r.verified_on), DEFAULT_VERIFIED_DATE)}] AS path_rels
         """
 
         if self.is_connected and self.driver:
@@ -1457,10 +1462,10 @@ class Neo4jKnowledgeGraph:
             try:
                 cypher = """
                 MATCH (:Person {id:$uid})-[:HOLDS]->(:Account)-[:HAS_MANDATE]->(md:Mandate {status:'active'})-[:CHARGES]->(m:Merchant)
-                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp:ParentCorp)
+                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp)
                 MATCH (pc:PriceChange)-[:AFFECTS]->(t)
                 WHERE pc.pct > $min_pct AND (t = md OR t = m OR t = corp)
-                RETURN md.id AS mandateId, m.name AS merchantName, pc.pct AS pct,
+                RETURN md.id AS mandateId, coalesce(m.name, md.merchant_name, 'Merchant') AS merchantName, pc.pct AS pct,
                        coalesce(pc.newAmount - pc.oldAmount, md.amount * pc.pct / 100.0) * coalesce(md.cyclesPerYear, 12) AS extraPerYear;
                 """
                 with self.driver.session() as session:
@@ -1535,8 +1540,9 @@ class Neo4jKnowledgeGraph:
             try:
                 cypher = """
                 MATCH (:Person {id:$uid})-[:HOLDS]->(:Account)-[:HAS_MANDATE]->(md:Mandate {status:'active'})-[:CHARGES]->(m:Merchant)
-                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp:ParentCorp)
-                RETURN coalesce(corp.name, m.name) AS owner, collect(DISTINCT m.name) AS services,
+                OPTIONAL MATCH (m)-[:OWNED_BY]->(corp)
+                RETURN coalesce(corp.name, m.name, md.merchant_name, 'Independent') AS owner,
+                       collect(DISTINCT coalesce(m.name, md.merchant_name, m.id)) AS services,
                        sum(md.amount*coalesce(md.cyclesPerYear, 12)) AS annualExposure
                 ORDER BY annualExposure DESC;
                 """
@@ -1592,13 +1598,23 @@ class Neo4jKnowledgeGraph:
         if self.is_connected and self.driver:
             try:
                 cypher = """
-                MATCH (md:Mandate {status:'marked_cancelled'})-[:HAS_CHARGE]->(c:Charge)
-                WHERE c.date > md.cancellationDate + duration({days:$graceDays})
-                RETURN md.id AS mandateId, c.id AS chargeId, c.date AS chargeDate, c.amount AS amount;
+                MATCH (p:Person {id:$uid})
+                MATCH (p)-[:HAS_MANDATE|HOLDS*1..2]->(md:Mandate)-[:HAS_CHARGE]->(c:Charge)
+                WHERE md.status IN ['marked_cancelled', 'cancel_confirmed_by_user', 'still_charging']
+                  AND date(substring(toString(c.date), 0, 10)) > date(substring(toString(md.cancellationDate), 0, 10)) + duration({days:$graceDays})
+                RETURN DISTINCT md.id AS mandateId, c.id AS chargeId, toString(c.date) AS chargeDate, c.amount AS amount;
                 """
                 with self.driver.session() as session:
-                    res = session.run(cypher, graceDays=grace_days)
-                    return [r.data() for r in res]
+                    res = session.run(cypher, uid=uid, graceDays=grace_days)
+                    seen_pairs = set()
+                    unique_results = []
+                    for r in res:
+                        d = r.data()
+                        pair = (d.get("mandateId"), d.get("chargeId"))
+                        if pair not in seen_pairs:
+                            seen_pairs.add(pair)
+                            unique_results.append(d)
+                    return unique_results
             except Exception as e:
                 print(f"Live Aura post-cancellation query deferred: {e}")
 
@@ -1622,10 +1638,12 @@ class Neo4jKnowledgeGraph:
             grace_limit = c_date + timedelta(days=grace_days)
 
             # Find all charges for this mandate
+            seen_charge_ids = set()
             for e in self.edges:
                 if e["source"] == md["id"] and e["type"] in ["HAD_CHARGE", "HAS_CHARGE"]:
                     ch_node = next((n for n in self.nodes if n["id"] == e["target"]), None)
-                    if ch_node:
+                    if ch_node and ch_node["id"] not in seen_charge_ids:
+                        seen_charge_ids.add(ch_node["id"])
                         ch_props = ch_node.get("properties", {})
                         ch_date_str = str(ch_props.get("date", ""))[:10]
                         try:

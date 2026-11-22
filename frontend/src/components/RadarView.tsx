@@ -86,19 +86,29 @@ export function RadarView({
 }: Props) {
   const [filter, setFilter] = useState<ExtendedFilter>('all')
 
+  const getAnnualCost = (m: Mandate) => {
+    if (m.annual_committed_cost != null && m.annual_committed_cost > 0) {
+      return m.annual_committed_cost
+    }
+    const amt = m.latest_amount || 0
+    const cad = (m.cadence || 'MONTHLY').toUpperCase()
+    const mult = cad === 'ANNUAL' || cad === 'YEARLY' ? 1 : cad === 'QUARTERLY' ? 4 : cad === 'WEEKLY' ? 52 : 12
+    return amt * mult
+  }
+
   // Total exposure: Compute dynamically from mandates if total prop is 0 or uninitialized
   const computedTotal = mandates.reduce((s, m) => {
-    const annual = m.annual_committed_cost || (m.latest_amount * (m.cadence === 'YEARLY' ? 1 : m.cadence === 'QUARTERLY' ? 4 : 12)) || 0
+    const annual = getAnnualCost(m)
     return s + (m.billing_type === 'usage_based' ? 0 : annual)
   }, 0)
 
-  const effectiveTotal = (total && total > 0) ? total : (computedTotal > 0 ? computedTotal : mandates.reduce((s, m) => s + (m.annual_committed_cost || 0), 0))
+  const effectiveTotal = (total && total > 0) ? total : (computedTotal > 0 ? computedTotal : mandates.reduce((s, m) => s + getAnnualCost(m), 0))
 
   // Honest savings math: Exclude usage-based from fixed contractual savings
   const saved = mandates
     .filter(m => cancelled.has(m.id))
     .reduce((s, m) => {
-      const annual = m.annual_committed_cost || (m.latest_amount * (m.cadence === 'YEARLY' ? 1 : m.cadence === 'QUARTERLY' ? 4 : 12)) || 0
+      const annual = getAnnualCost(m)
       return s + (m.billing_type === 'usage_based' ? 0 : annual)
     }, 0)
 
