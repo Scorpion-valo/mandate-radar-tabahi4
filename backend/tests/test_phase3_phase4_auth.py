@@ -9,9 +9,13 @@ Validates:
 6. Security checks: expired token, tampered token, cross-user isolation.
 """
 import uuid
+import sys
+import os
 from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.db import init_db, get_db
 from app.models.user import User

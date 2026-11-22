@@ -3,12 +3,16 @@ Phase 2 Acceptance Test Suite: Real Google Sign-in Verification
 Validates:
 1. Posting raw {email, full_name} without credential returns 401.
 2. Posting bad/tampered credential returns 401.
-3. Successfully verifies token structure and returns JWT only from verified claims.
+3. Successfully verifies valid token structure and returns JWT only from verified claims.
 4. Demo account arun.sharma@example.com is rejected with 403 on Google sign-in.
 """
 import pytest
+import sys
+import os
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.db import init_db
 from main import app

@@ -8,9 +8,13 @@ Validates:
 """
 import io
 import uuid
+import sys
+import os
 from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.db import get_db, Base, engine, init_db
 from app.models.user import User
